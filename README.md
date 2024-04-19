@@ -48,13 +48,17 @@ python main.py --dataset cicids --model_type coteaching_plus --noise_type symmet
 If you find this implementation helpful for your research, please consider citing the original paper:
 
 ```bash
-@inproceedings{yu2019does,
-  title={How does Disagreement Help Generalization against Label Corruption?},
-  author={Yu, Xingrui and Han, Bo and Yao, Jiangchao and Niu, Gang and Tsang, Ivor and Sugiyama, Masashi},
-  booktitle={International Conference on Machine Learning},
-  pages={7164--7173},
-  year={2019}
-}
+@INPROCEEDINGS{10179453,
+  author={Wu, Xian and Guo, Wenbo and Yan, Jia and Coskun, Baris and Xing, Xinyu},
+  booktitle={2023 IEEE Symposium on Security and Privacy (SP)}, 
+  title={From Grim Reality to Practical Solution: Malware Classification in Real-World Noise}, 
+  year={2023},
+  volume={},
+  number={},
+  pages={2602-2619},
+  keywords={Training;Text mining;Privacy;Supervised learning;Training data;Semisupervised learning;Malware},
+  doi={10.1109/SP46215.2023.10179453}}
+
 ```
 
 Additionally, if you utilize this adaptation for your research, please reference this repository and the dataset accordingly.
@@ -62,6 +66,6 @@ Additionally, if you utilize this adaptation for your research, please reference
 
 ## Acknowledgments
 
-This project is inspired by the work of Xingrui Yu et al., on leveraging disagreement for improving generalization in the presence of label noise. Our adaptation focuses on the specific challenges posed by the NIDS domain.
+This project is inspired by the work of Xiani Wu et al., on "From Grim Reality to Practical Solution: Malware Classification in Real-World Noise" Our adaptation focuses on the specific challenges posed by the NIDS domain.
 
 Feel free to adjust the content to better suit your project or presentation needs.
