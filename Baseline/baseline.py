@@ -255,7 +255,9 @@ def evaluate(test_loader, model, label_encoder, args):
     data_augmentation_display = "No Data Augmentation" if args.data_augmentation is None or args.data_augmentation.lower() == 'none' else args.data_augmentation.capitalize()
 
     title = f"{model_type_formatted} on {dataset_formatted} with {data_augmentation_display}, Noise Rate: {args.noise_rate}"
-    sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})
+    # Heatmap with thin black borders around cells
+    sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names,
+            annot_kws={"fontsize": 14}, linewidths=.75, linecolor='black', rasterized=False)    
     plt.xticks(rotation=45, ha='right', fontsize=14)  
     plt.yticks(rotation=45, va='top', fontsize=14)
     plt.xlabel('Predicted', fontsize=14, fontweight='bold')  
@@ -263,17 +265,20 @@ def evaluate(test_loader, model, label_encoder, args):
     plt.title(title, fontsize=14, fontweight='bold')
     plt.tight_layout()
 
+    # Adding border around the color bar
+    cbar = plt.gca().collections[0].colorbar
+    cbar.outline.set_linewidth(1)
+    cbar.outline.set_edgecolor("black")
+
     matrix_dir = os.path.join(args.result_dir, 'confusion_matrix')
     if not os.path.exists(matrix_dir):
         os.makedirs(matrix_dir)
     
     matrix_filename = f"{args.dataset}_{args.noise_rate}_{args.data_augmentation.replace(' ', '_').lower()}_confusion_matrix.png"
-    plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight')
+    plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight', dpi=300)
     plt.close()
 
     return metrics
-
-
 
 
 def weights_init(m):
