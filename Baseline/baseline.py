@@ -49,11 +49,11 @@ parser.add_argument('--noise_rate', type=float, help='corruption rate, should be
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
 parser.add_argument('--noise_type', type=str, help='[pairflip, symmetric]', default='symmetric')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
-parser.add_argument('--dataset', type=str, help='cicids', default='cicids')
+parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','windows_pe_synthetic'])
 parser.add_argument('--n_epoch', type=int, default=150)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
-parser.add_argument('--print_freq', type=int, default=500)
+parser.add_argument('--print_freq', type=int, default=1)
 parser.add_argument('--num_workers', type=int, default=1, help='how many subprocesses to use for data loading')
 parser.add_argument('--epoch_decay_start', type=int, default=80)
 parser.add_argument('--model_type', type=str, help='[coteaching, coteaching_plus]', default='baseline')
@@ -68,9 +68,24 @@ torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 
 # Hyper Parameters
-batch_size = 256
-learning_rate = args.lr 
-init_epoch = 0
+
+if args.dataset == "CIC_IDS_2017":
+    batch_size = 256
+    learning_rate = args.lr 
+    init_epoch = 0
+    class_labels = [
+    "Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
+    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+    "InstallMonster", "Locky"]
+elif args.dataset == "windows_pe_real":
+    batch_size = 128
+    learning_rate = args.lr 
+    init_epoch = 0
+elif args.dataset == "windows_pe_synthetic":
+    batch_size = 64
+    learning_rate = args.lr 
+    init_epoch = 0
+
 
 
 class CICIDSDataset(Dataset):
@@ -211,7 +226,6 @@ def clean_class_name(class_name):
     cleaned_name = re.sub(r'\bweb attack\b', '', cleaned_name, flags=re.IGNORECASE)
     return cleaned_name.strip()  # Strip leading/trailing spaces
 
-
 def evaluate(test_loader, model, label_encoder, args):
     model.eval()
     all_preds = []
@@ -226,8 +240,19 @@ def evaluate(test_loader, model, label_encoder, args):
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
-    class_names = label_encoder.classes_
-    cleaned_class_names = [clean_class_name(name) for name in class_names]    
+    if args.dataset == 'CIC_IDS_2017':
+        index_to_class_name = {i: label_encoder.inverse_transform([i])[0] for i in range(len(label_encoder.classes_))}
+    elif args.dataset == 'windows_pe_real':
+        index_to_class_name = {
+            i: name for i, name in enumerate([
+                "Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
+                "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                "InstallMonster", "Locky"])
+        }
+            
+    cleaned_class_names = [clean_class_name(name) for name in index_to_class_name.values()]
+    
+
     metrics = {
         'accuracy': accuracy_score(all_labels, all_preds),
         'balanced_accuracy': balanced_accuracy_score(all_labels, all_preds),
@@ -238,9 +263,18 @@ def evaluate(test_loader, model, label_encoder, args):
     }
 
      # Class accuracy
-    unique_labels = np.unique(all_labels)
-    class_accuracy = {f'class_{label_encoder.inverse_transform([label])[0]}_acc': np.mean([all_preds[i] == label for i, lbl in enumerate(all_labels) if lbl == label]) for label in unique_labels}
-    metrics.update(class_accuracy)
+    if args.dataset == 'CIC_IDS_2017':
+        unique_labels = np.unique(all_labels)
+        class_accuracy = {f'class_{label_encoder.inverse_transform([label])[0]}_acc': np.mean([all_preds[i] == label for i, lbl in enumerate(all_labels) if lbl == label]) for label in unique_labels}
+        metrics.update(class_accuracy)
+    elif args.dataset == 'windows_pe_real':
+        unique_labels = np.unique(all_labels)
+        class_accuracy = {
+            f'{index_to_class_name[label]}_acc': np.mean([
+                all_preds[i] == label for i, lbl in enumerate(all_labels) if lbl == label
+            ]) for label in unique_labels
+        }
+        metrics.update(class_accuracy)
 
     # Define colors
     colors = ["#FFFFFF", "#B9F5F1", "#C8A8E2"]  
@@ -255,9 +289,7 @@ def evaluate(test_loader, model, label_encoder, args):
     data_augmentation_display = "No Data Augmentation" if args.data_augmentation is None or args.data_augmentation.lower() == 'none' else args.data_augmentation.capitalize()
 
     title = f"{model_type_formatted} on {dataset_formatted} with {data_augmentation_display}, Noise Rate: {args.noise_rate}"
-    # Heatmap with thin black borders around cells
-    sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names,
-            annot_kws={"fontsize": 14}, linewidths=.75, linecolor='black', rasterized=False)    
+    sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})
     plt.xticks(rotation=45, ha='right', fontsize=14)  
     plt.yticks(rotation=45, va='top', fontsize=14)
     plt.xlabel('Predicted', fontsize=14, fontweight='bold')  
@@ -265,17 +297,12 @@ def evaluate(test_loader, model, label_encoder, args):
     plt.title(title, fontsize=14, fontweight='bold')
     plt.tight_layout()
 
-    # Adding border around the color bar
-    cbar = plt.gca().collections[0].colorbar
-    cbar.outline.set_linewidth(1)
-    cbar.outline.set_edgecolor("black")
-
     matrix_dir = os.path.join(args.result_dir, 'confusion_matrix')
     if not os.path.exists(matrix_dir):
         os.makedirs(matrix_dir)
     
     matrix_filename = f"{args.dataset}_{args.noise_rate}_{args.data_augmentation.replace(' ', '_').lower()}_confusion_matrix.png"
-    plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight', dpi=300)
+    plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight')
     plt.close()
 
     return metrics
@@ -294,71 +321,72 @@ def weights_init(m):
         if m.bias is not None:
             init.constant_(m.bias.data, 0)     # Initialize bias to zero
 
+def load_npz_data(features_file_path, labels_file_path):
+    # Load the files
+    with np.load(features_file_path) as data:
+        # Check if 'arr_0' is in the file
+        if 'arr_0' in data:
+            features = data['arr_0']
+        else:
+            raise KeyError(f"'arr_0' is not in the features file: {features_file_path}")
+    
+    with np.load(labels_file_path) as data:
+        # Check if 'arr_0' is in the file
+        if 'arr_0' in data:
+            labels = data['arr_0']
+        else:
+            raise KeyError(f"'arr_0' is not in the labels file: {labels_file_path}")
+
+    print(labels)
+    return features, labels
+
+
 def main():
-
-    preprocessed_file_path = 'final_dataframe.csv'
-
-    if os.path.exists(preprocessed_file_path):
-        print("Concatonated dataset already exists")
-        # Load the preprocessed DataFrame from the saved CSV file
-        df = pd.read_csv(preprocessed_file_path)
-    else:
-        print("Dataset doesn't exists: generating...")
-
-        df1 = pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv")
-        df2=pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv")
-        df3=pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Friday-WorkingHours-Morning.pcap_ISCX.csv")
-        df4=pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Monday-WorkingHours.pcap_ISCX.csv")
-        df5=pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv")
-        df6=pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv")
-        df7=pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Tuesday-WorkingHours.pcap_ISCX.csv")
-        df8=pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Wednesday-workingHours.pcap_ISCX.csv")
-        df = pd.concat([df1, df2, df3, df4, df5, df6, df7, df8], ignore_index=True)
-
-        # nRowsRead = 20000  # specify 'None' to read all rows
-        # df6 = pd.read_csv("data/cicids2017/MachineLearningCSV/MachineLearningCVE/Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv", nrows=nRowsRead)
-        # df = pd.concat([df6], ignore_index=True)
-
-        df.reset_index(drop=True, inplace=True)
-        nRow, nCol = df.shape
-        df.columns = df.columns.str.strip()
-        print("Saving concatonated data")
-
-        df.to_csv(preprocessed_file_path, index=False)
-
-    # Convert your DataFrame columns to numpy arrays if not already done
     label_encoder = LabelEncoder()
-    labels_np = label_encoder.fit_transform(df['Label'].values)
 
-    features_np = df.drop('Label', axis=1).values.astype(np.float32)
+    if args.dataset == 'CIC_IDS_2017':
+        preprocessed_file_path = 'data/final_dataframe.csv'
+        if not os.path.exists(preprocessed_file_path):
+            filenames = [os.path.join("data/cicids2017/MachineLearningCSV/MachineLearningCVE", f) for f in os.listdir("data/cicids2017/MachineLearningCSV/MachineLearningCVE") if f.endswith('.csv')]
+            df_list = [pd.read_csv(filename) for filename in filenames]
+            df = pd.concat(df_list, ignore_index=True)
+            df.columns = df.columns.str.strip()
+            df.to_csv(preprocessed_file_path, index=False)
+            print("Saved concatenated data")
+        df = pd.read_csv(preprocessed_file_path)
+        label_encoder = LabelEncoder()
+        labels_np = label_encoder.fit_transform(df['Label'].values)
+        features_np = df.drop('Label', axis=1).values.astype(np.float32)
+        # Check for inf and -inf values
+        print("Contains inf: ", np.isinf(features_np).any())
+        print("Contains -inf: ", np.isneginf(features_np).any())
+        # Check for NaN values
+        print("Contains NaN: ", np.isnan(features_np).any())
+        # Replace inf/-inf with NaN
+        features_np[np.isinf(features_np) | np.isneginf(features_np)] = np.nan
+        # Impute NaN values with the median of each column
+        imputer = SimpleImputer(strategy='median')
+        features_np_imputed = imputer.fit_transform(features_np)
+        # Initialize the StandardScaler
+        scaler = StandardScaler()
+        # Fit on the imputed features data and transform it to standardize
+        features_np_standardized = scaler.fit_transform(features_np_imputed)
+        # Generate indices for your dataset, which will be used for splitting
+        indices = np.arange(len(labels_np))
+        # Correctly split the standardized and imputed dataset
+        X_train, X_test, y_train, y_test = train_test_split(features_np_standardized, labels_np, test_size=0.3, random_state=42)
+
+    elif args.dataset == 'windows_pe_real':
+        npz_file_path = 'data/Windows_PE/real_world/malware.npz'
+        with np.load(npz_file_path) as data:
+            X_train, y_train = data['X_train'], data['y_train']
+            X_test, y_test = data['X_test'], data['y_test']
+        y_train = label_encoder.fit_transform(y_train)
+        y_test = label_encoder.transform(y_test)
 
 
-    # Check for inf and -inf values
-    print("Contains inf: ", np.isinf(features_np).any())
-    print("Contains -inf: ", np.isneginf(features_np).any())
-
-    # Check for NaN values
-    print("Contains NaN: ", np.isnan(features_np).any())
-
-    # Replace inf/-inf with NaN
-    features_np[np.isinf(features_np) | np.isneginf(features_np)] = np.nan
-
-    # Impute NaN values with the median of each column
-    imputer = SimpleImputer(strategy='median')
-    features_np_imputed = imputer.fit_transform(features_np)
-
-    # Initialize the StandardScaler
-    scaler = StandardScaler()
-
-    # Fit on the imputed features data and transform it to standardize
-    features_np_standardized = scaler.fit_transform(features_np_imputed)
-
-    # Generate indices for your dataset, which will be used for splitting
-    indices = np.arange(len(labels_np))
-
-    # Correctly split the standardized and imputed dataset
-    X_train, X_test, y_train, y_test = train_test_split(features_np_standardized, labels_np, test_size=0.3, random_state=42)
-
+    num_classes = len(np.unique(y_train))
+    print("Number of classes:", num_classes)
     # Data Augmentation Handling based on the user's choice
     if args.data_augmentation == 'smote':
         smote = SMOTE(random_state=42)
@@ -366,15 +394,17 @@ def main():
     elif args.data_augmentation == 'undersampling':
         undersampler = RandomUnderSampler(random_state=42)
         X_train, y_train = undersampler.fit_resample(X_train, y_train)
-        # important print as undersampling can cause division by zero in extreme data imbalance cases like cic-ids-2017
-        print(f"Samples after undersampling: {len(X_train)}") 
-
+        print(f"Samples after undersampling: {len(X_train)}")
     elif args.data_augmentation == 'oversampling':
         oversampler = RandomOverSampler(random_state=42)
         X_train, y_train = oversampler.fit_resample(X_train, y_train)
     elif args.data_augmentation == 'adasyn':
         adasyn = ADASYN(random_state=42)
         X_train, y_train = adasyn.fit_resample(X_train, y_train)
+    elif args.data_augmentation == 'none' or args.data_augmentation is None:
+        # Explicitly do nothing to ensure no augmentation occurs
+        pass
+
 
     # Introduce label noise after data augmentation
     y_train_noisy, noise_or_not = introduce_label_noise(y_train, noise_rate=args.noise_rate)
@@ -384,19 +414,27 @@ def main():
     test_dataset = CICIDSDataset(X_test, y_test, np.zeros(len(y_test), dtype=bool))  # Test dataset should have no noise
 
     # DataLoader setup (as per previous code)
-    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, num_workers=args.num_workers, drop_last=True, shuffle=True)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, num_workers=args.num_workers, drop_last=False, shuffle=True)
     test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, num_workers=args.num_workers, drop_last=True, shuffle=False)
+
     # Define models
     print('building model...')
 
     torch.manual_seed(234565678)
-    clf1 = MLPNet()
+
+    if args.dataset == 'windows_pe_real':
+        num_classes = len(np.unique(y_train))  
+        clf1 = MLPNet(num_features=1024, num_classes=12)  
+    elif args.dataset == 'CIC_IDS_2017':
+        clf1 = MLPNet()
+
     clf1.apply(weights_init)
     clf1.cuda()
     optimizer1 = torch.optim.Adam(clf1.parameters(), lr=learning_rate)
 
     # Define optimizers
     print(clf1.parameters)
+
 
     # Check directories exist for saving
     result_dir_path = os.path.dirname(txtfile)
