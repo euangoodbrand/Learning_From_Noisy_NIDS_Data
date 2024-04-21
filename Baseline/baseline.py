@@ -49,7 +49,7 @@ parser.add_argument('--noise_rate', type=float, help='corruption rate, should be
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
 parser.add_argument('--noise_type', type=str, help='[pairflip, symmetric]', default='symmetric')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
-parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','windows_pe_synthetic'])
+parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
 parser.add_argument('--n_epoch', type=int, default=150)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
@@ -73,16 +73,12 @@ if args.dataset == "CIC_IDS_2017":
     batch_size = 256
     learning_rate = args.lr 
     init_epoch = 0
-    class_labels = [
-    "Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-    "InstallMonster", "Locky"]
 elif args.dataset == "windows_pe_real":
     batch_size = 128
     learning_rate = args.lr 
     init_epoch = 0
-elif args.dataset == "windows_pe_synthetic":
-    batch_size = 64
+elif args.dataset == "BODMAS":
+    batch_size = 128
     learning_rate = args.lr 
     init_epoch = 0
 
@@ -249,6 +245,12 @@ def evaluate(test_loader, model, label_encoder, args):
                 "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
                 "InstallMonster", "Locky"])
         }
+    elif args.dataset == 'BODMAS':
+        index_to_class_name = {
+            i: name for i, name in enumerate([
+                "Class 1", "Class 2", "Class 3", "Class 4", "Class 5",
+                "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"])
+        }
             
     cleaned_class_names = [clean_class_name(name) for name in index_to_class_name.values()]
     
@@ -275,6 +277,14 @@ def evaluate(test_loader, model, label_encoder, args):
             ]) for label in unique_labels
         }
         metrics.update(class_accuracy)
+    elif args.dataset == 'BODMAS':
+        unique_labels = np.unique(all_labels)
+        class_accuracy = {
+            f'{index_to_class_name[label]}_acc': np.mean([
+                all_preds[i] == label for i, lbl in enumerate(all_labels) if lbl == label
+            ]) for label in unique_labels
+        }
+        metrics.update(class_accuracy)
 
     # Define colors
     colors = ["#FFFFFF", "#B9F5F1", "#C8A8E2"]  
@@ -289,7 +299,7 @@ def evaluate(test_loader, model, label_encoder, args):
     data_augmentation_display = "No Data Augmentation" if args.data_augmentation is None or args.data_augmentation.lower() == 'none' else args.data_augmentation.capitalize()
 
     title = f"{model_type_formatted} on {dataset_formatted} with {data_augmentation_display}, Noise Rate: {args.noise_rate}"
-    sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})
+    sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14}, linewidths=0.75, linecolor='black')    
     plt.xticks(rotation=45, ha='right', fontsize=14)  
     plt.yticks(rotation=45, va='top', fontsize=14)
     plt.xlabel('Predicted', fontsize=14, fontweight='bold')  
@@ -297,12 +307,17 @@ def evaluate(test_loader, model, label_encoder, args):
     plt.title(title, fontsize=14, fontweight='bold')
     plt.tight_layout()
 
+    # Adding border around the color bar
+    cbar = plt.gca().collections[0].colorbar
+    cbar.outline.set_linewidth(1)
+    cbar.outline.set_edgecolor("black")
+
     matrix_dir = os.path.join(args.result_dir, 'confusion_matrix')
     if not os.path.exists(matrix_dir):
         os.makedirs(matrix_dir)
     
     matrix_filename = f"{args.dataset}_{args.noise_rate}_{args.data_augmentation.replace(' ', '_').lower()}_confusion_matrix.png"
-    plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight')
+    plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight', dpi=300)
     plt.close()
 
     return metrics
@@ -383,6 +398,13 @@ def main():
             X_test, y_test = data['X_test'], data['y_test']
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
+    elif args.dataset == 'BODMAS':
+        npz_file_path = 'data/Windows_PE/synthetic/malware.npz'
+        with np.load(npz_file_path) as data:
+            X_train, y_train = data['X_train'], data['y_train']
+            X_test, y_test = data['X_test'], data['y_test']
+        y_train = label_encoder.fit_transform(y_train)
+        y_test = label_encoder.transform(y_test)
 
 
     num_classes = len(np.unique(y_train))
@@ -402,7 +424,6 @@ def main():
         adasyn = ADASYN(random_state=42)
         X_train, y_train = adasyn.fit_resample(X_train, y_train)
     elif args.data_augmentation == 'none' or args.data_augmentation is None:
-        # Explicitly do nothing to ensure no augmentation occurs
         pass
 
 
@@ -413,7 +434,6 @@ def main():
     train_dataset = CICIDSDataset(X_train, y_train_noisy, noise_or_not)
     test_dataset = CICIDSDataset(X_test, y_test, np.zeros(len(y_test), dtype=bool))  # Test dataset should have no noise
 
-    # DataLoader setup (as per previous code)
     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, num_workers=args.num_workers, drop_last=False, shuffle=True)
     test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, num_workers=args.num_workers, drop_last=True, shuffle=False)
 
@@ -425,6 +445,8 @@ def main():
     if args.dataset == 'windows_pe_real':
         num_classes = len(np.unique(y_train))  
         clf1 = MLPNet(num_features=1024, num_classes=12)  
+    elif args.dataset == 'BODMAS':
+        clf1 = MLPNet(num_features=2381, num_classes=10)  
     elif args.dataset == 'CIC_IDS_2017':
         clf1 = MLPNet()
 
@@ -444,8 +466,6 @@ def main():
     # Ensure the result directory exists
     if not os.path.exists(args.result_dir):
         os.makedirs(args.result_dir)
-
-
 
     # Initialize CSV with dynamic columns after initial evaluation
     initial_metrics = evaluate(test_loader, clf1,label_encoder, args)
