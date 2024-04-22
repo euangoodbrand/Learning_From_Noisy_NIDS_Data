@@ -1,41 +1,46 @@
 # -*- coding:utf-8 -*-
 from __future__ import print_function 
-import os
-from matplotlib.colors import LinearSegmentedColormap
-import torch 
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.autograd import Variable
-import torchvision.transforms as transforms
 from model import MLPNet
-import argparse, sys
-import numpy as np
-import datetime
-from tqdm import tqdm
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt # plotting
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-import torch.nn.init as init
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
-from imblearn.over_sampling import SMOTE
-from torch.optim import AdamW
-import csv
+
+# General Imports
+import os
 import re
+import csv
+import datetime
+import argparse, sys
+
+# Maths and Data processing imports
+import numpy as np
+import pandas as pd
+
+# Plotting Imports
 import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.model_selection import StratifiedKFold
+from matplotlib.colors import LinearSegmentedColormap
 
+# Sklearn Import
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 )
+
+# Imblearn Imports
+from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import RandomOverSampler, ADASYN
+
+# Pytorch Imports
+import torch 
+import torch.nn as nn
 import torch.optim as optim
+import torch.nn.init as init
+import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
+from torch.utils.data import Dataset, DataLoader
 
 for dirname, _, filenames in os.walk('/data'):
     for filename in filenames:
@@ -65,7 +70,6 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default=None, help='Data augmentation technique, if any')
 
 args = parser.parse_args()
-
 
 # Seed
 torch.manual_seed(args.seed)
@@ -189,9 +193,8 @@ def train(train_loader, model, optimizer, criterion, epoch):
     train_total = 0
     train_correct = 0
 
-    for i, (data, labels, _) in enumerate(train_loader):  # Corrected line
+    for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
-
         # Forward pass: Compute predicted outputs by passing inputs to the model
         logits = model(data)
 
@@ -211,7 +214,6 @@ def train(train_loader, model, optimizer, criterion, epoch):
 
         # Perform a single optimization step (parameter update)
         optimizer.step()
-
         if (i + 1) % args.print_freq == 0:
             print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
                   % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, loss.item()))
@@ -377,9 +379,7 @@ def main():
             df = pd.read_csv(preprocessed_file_path)
             labels_np = label_encoder.fit_transform(df['Label'].values)
             features_np = df.drop('Label', axis=1).values.astype(np.float32)
-            features_np = handle_inf_nan(features_np)  # Assume this function properly handles inf/nan
-
-            # Splitting the data into train and test sets
+            features_np = handle_inf_nan(features_np) 
             X_train, X_test, y_train, y_test = train_test_split(features_np, labels_np, test_size=0.3, random_state=42)
 
     elif args.dataset == 'windows_pe_real':
@@ -458,7 +458,6 @@ def main():
         criterion = CrossEntropyLoss()
 
         for epoch in range(1, args.n_epoch + 1):
-            # Training process (assume defined elsewhere)
             train(train_loader, model, optimizer, criterion, epoch)
             metrics = evaluate(val_loader, model, label_encoder, args)
 
