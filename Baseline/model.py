@@ -3,14 +3,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MLPNet(nn.Module):
-    def __init__(self, num_features=78, num_classes=15):
+    def __init__(self, num_features=78, num_classes=15, dataset=None):
         super(MLPNet, self).__init__()
         # First Fully-Connected Layer
-        self.fc1 = nn.Linear(num_features, 256)
-        # Second Fully-Connected Layer
-        self.fc2 = nn.Linear(256, 128)
-        # Third Fully-Connected Layer
-        self.fc3 = nn.Linear(128, num_classes)
+        if dataset == 'BODMAS':
+            self.fc1 = nn.Linear(num_features, 1024)
+            # Second Fully-Connected Layer
+            self.fc2 = nn.Linear(1024, 526)
+            # Third Fully-Connected Layer
+            self.fc3 = nn.Linear(526, num_classes)
+        else:
+            self.fc1 = nn.Linear(num_features, 256)
+            # Second Fully-Connected Layer
+            self.fc2 = nn.Linear(256, 128)
+            # Third Fully-Connected Layer
+            self.fc3 = nn.Linear(128, num_classes)
         # First Dropout layer
         # self.dropout1 = nn.Dropout(0.1)
         # # Second Dropout layer

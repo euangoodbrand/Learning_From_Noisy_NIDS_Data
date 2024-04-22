@@ -27,11 +27,15 @@ import csv
 import re
 import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn.model_selection import StratifiedKFold
+
 from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 )
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import RandomOverSampler, ADASYN
+import torch.optim as optim
+from torch.nn import CrossEntropyLoss
 
 for dirname, _, filenames in os.walk('/data'):
     for filename in filenames:
@@ -267,7 +271,7 @@ def evaluate(test_loader, model, label_encoder, args):
      # Class accuracy
     if args.dataset == 'CIC_IDS_2017':
         unique_labels = np.unique(all_labels)
-        class_accuracy = {f'class_{label_encoder.inverse_transform([label])[0]}_acc': np.mean([all_preds[i] == label for i, lbl in enumerate(all_labels) if lbl == label]) for label in unique_labels}
+        class_accuracy = {f'{label_encoder.inverse_transform([label])[0]}_acc': np.mean([all_preds[i] == label for i, lbl in enumerate(all_labels) if lbl == label]) for label in unique_labels}
         metrics.update(class_accuracy)
     elif args.dataset == 'windows_pe_real':
         unique_labels = np.unique(all_labels)
@@ -336,60 +340,47 @@ def weights_init(m):
         if m.bias is not None:
             init.constant_(m.bias.data, 0)     # Initialize bias to zero
 
-def load_npz_data(features_file_path, labels_file_path):
-    # Load the files
-    with np.load(features_file_path) as data:
-        # Check if 'arr_0' is in the file
-        if 'arr_0' in data:
-            features = data['arr_0']
-        else:
-            raise KeyError(f"'arr_0' is not in the features file: {features_file_path}")
-    
-    with np.load(labels_file_path) as data:
-        # Check if 'arr_0' is in the file
-        if 'arr_0' in data:
-            labels = data['arr_0']
-        else:
-            raise KeyError(f"'arr_0' is not in the labels file: {labels_file_path}")
+def handle_inf_nan(features_np):
+    print("Contains inf: ", np.isinf(features_np).any())
+    print("Contains -inf: ", np.isneginf(features_np).any())
+    print("Contains NaN: ", np.isnan(features_np).any())
+    features_np[np.isinf(features_np) | np.isneginf(features_np)] = np.nan
+    imputer = SimpleImputer(strategy='median')
+    features_np = imputer.fit_transform(features_np)
+    scaler = StandardScaler()
+    return scaler.fit_transform(features_np)
 
-    print(labels)
+
+def apply_data_augmentation(features, labels, augmentation_method):
+    if augmentation_method == 'smote':
+        return SMOTE(random_state=42).fit_resample(features, labels)
+    elif augmentation_method == 'undersampling':
+        return RandomUnderSampler(random_state=42).fit_resample(features, labels)
+    elif augmentation_method == 'oversampling':
+        return RandomOverSampler(random_state=42).fit_resample(features, labels)
+    elif augmentation_method == 'adasyn':
+        return ADASYN(random_state=42).fit_resample(features, labels)
     return features, labels
-
 
 def main():
     label_encoder = LabelEncoder()
 
     if args.dataset == 'CIC_IDS_2017':
-        preprocessed_file_path = 'data/final_dataframe.csv'
-        if not os.path.exists(preprocessed_file_path):
-            filenames = [os.path.join("data/cicids2017/MachineLearningCSV/MachineLearningCVE", f) for f in os.listdir("data/cicids2017/MachineLearningCSV/MachineLearningCVE") if f.endswith('.csv')]
-            df_list = [pd.read_csv(filename) for filename in filenames]
-            df = pd.concat(df_list, ignore_index=True)
-            df.columns = df.columns.str.strip()
-            df.to_csv(preprocessed_file_path, index=False)
-            print("Saved concatenated data")
-        df = pd.read_csv(preprocessed_file_path)
-        label_encoder = LabelEncoder()
-        labels_np = label_encoder.fit_transform(df['Label'].values)
-        features_np = df.drop('Label', axis=1).values.astype(np.float32)
-        # Check for inf and -inf values
-        print("Contains inf: ", np.isinf(features_np).any())
-        print("Contains -inf: ", np.isneginf(features_np).any())
-        # Check for NaN values
-        print("Contains NaN: ", np.isnan(features_np).any())
-        # Replace inf/-inf with NaN
-        features_np[np.isinf(features_np) | np.isneginf(features_np)] = np.nan
-        # Impute NaN values with the median of each column
-        imputer = SimpleImputer(strategy='median')
-        features_np_imputed = imputer.fit_transform(features_np)
-        # Initialize the StandardScaler
-        scaler = StandardScaler()
-        # Fit on the imputed features data and transform it to standardize
-        features_np_standardized = scaler.fit_transform(features_np_imputed)
-        # Generate indices for your dataset, which will be used for splitting
-        indices = np.arange(len(labels_np))
-        # Correctly split the standardized and imputed dataset
-        X_train, X_test, y_train, y_test = train_test_split(features_np_standardized, labels_np, test_size=0.3, random_state=42)
+            preprocessed_file_path = 'data/final_dataframe.csv'
+            if not os.path.exists(preprocessed_file_path):
+                filenames = [os.path.join("data/cicids2017/MachineLearningCSV/MachineLearningCVE", f) for f in os.listdir("data/cicids2017/MachineLearningCSV/MachineLearningCVE") if f.endswith('.csv')]
+                df_list = [pd.read_csv(filename) for filename in filenames]
+                df = pd.concat(df_list, ignore_index=True)
+                df.columns = df.columns.str.strip()
+                df.to_csv(preprocessed_file_path, index=False)
+                print("Saved concatenated data")
+            df = pd.read_csv(preprocessed_file_path)
+            labels_np = label_encoder.fit_transform(df['Label'].values)
+            features_np = df.drop('Label', axis=1).values.astype(np.float32)
+            features_np = handle_inf_nan(features_np)  # Assume this function properly handles inf/nan
+
+            # Splitting the data into train and test sets
+            X_train, X_test, y_train, y_test = train_test_split(features_np, labels_np, test_size=0.3, random_state=42)
 
     elif args.dataset == 'windows_pe_real':
         npz_file_path = 'data/Windows_PE/real_world/malware.npz'
@@ -398,6 +389,7 @@ def main():
             X_test, y_test = data['X_test'], data['y_test']
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
+
     elif args.dataset == 'BODMAS':
         npz_file_path = 'data/Windows_PE/synthetic/malware.npz'
         with np.load(npz_file_path) as data:
@@ -406,57 +398,12 @@ def main():
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
 
+    features_np, labels_np = apply_data_augmentation(X_train, y_train, args.data_augmentation)
+    labels_np, noise_or_not = introduce_label_noise(labels_np, noise_rate=args.noise_rate)
 
-    num_classes = len(np.unique(y_train))
-    print("Number of classes:", num_classes)
-    # Data Augmentation Handling based on the user's choice
-    if args.data_augmentation == 'smote':
-        smote = SMOTE(random_state=42)
-        X_train, y_train = smote.fit_resample(X_train, y_train)
-    elif args.data_augmentation == 'undersampling':
-        undersampler = RandomUnderSampler(random_state=42)
-        X_train, y_train = undersampler.fit_resample(X_train, y_train)
-        print(f"Samples after undersampling: {len(X_train)}")
-    elif args.data_augmentation == 'oversampling':
-        oversampler = RandomOverSampler(random_state=42)
-        X_train, y_train = oversampler.fit_resample(X_train, y_train)
-    elif args.data_augmentation == 'adasyn':
-        adasyn = ADASYN(random_state=42)
-        X_train, y_train = adasyn.fit_resample(X_train, y_train)
-    elif args.data_augmentation == 'none' or args.data_augmentation is None:
-        pass
-
-
-    # Introduce label noise after data augmentation
-    y_train_noisy, noise_or_not = introduce_label_noise(y_train, noise_rate=args.noise_rate)
-
-    # Prepare datasets for model training and evaluation
-    train_dataset = CICIDSDataset(X_train, y_train_noisy, noise_or_not)
-    test_dataset = CICIDSDataset(X_test, y_test, np.zeros(len(y_test), dtype=bool))  # Test dataset should have no noise
-
-    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, num_workers=args.num_workers, drop_last=False, shuffle=True)
-    test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, num_workers=args.num_workers, drop_last=True, shuffle=False)
-
-    # Define models
-    print('building model...')
-
-    torch.manual_seed(234565678)
-
-    if args.dataset == 'windows_pe_real':
-        num_classes = len(np.unique(y_train))  
-        clf1 = MLPNet(num_features=1024, num_classes=12)  
-    elif args.dataset == 'BODMAS':
-        clf1 = MLPNet(num_features=2381, num_classes=10)  
-    elif args.dataset == 'CIC_IDS_2017':
-        clf1 = MLPNet()
-
-    clf1.apply(weights_init)
-    clf1.cuda()
-    optimizer1 = torch.optim.Adam(clf1.parameters(), lr=learning_rate)
-
-    # Define optimizers
-    print(clf1.parameters)
-
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
+    results = []
+    fold = 0
 
     # Check directories exist for saving
     result_dir_path = os.path.dirname(txtfile)
@@ -467,40 +414,65 @@ def main():
     if not os.path.exists(args.result_dir):
         os.makedirs(args.result_dir)
 
-    # Initialize CSV with dynamic columns after initial evaluation
-    initial_metrics = evaluate(test_loader, clf1,label_encoder, args)
-    header_fields = list(initial_metrics.keys())
+    # Prepare CSV file
+    os.makedirs(args.result_dir, exist_ok=True)
 
+    if args.dataset == 'BODMAS':
+        with open(txtfile, "w", newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+    elif args.dataset == 'CIC_IDS_2017':
+        with open(txtfile, "w", newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+                        [f'{label}_acc' for label in label_encoder.classes_]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
 
-    with open(txtfile, "w", newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=header_fields)
-        writer.writeheader()
+    elif args.dataset == 'windows_pe_real':
+        labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
+                "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                "InstallMonster", "Locky"]
+        with open(txtfile, "w", newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+                        [f'{label}_acc' for label in labels]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            
 
-    # Print and save initial evaluation results
-    print('Initial Evaluation - Metrics: ' + ', '.join([f'{k}: {v:.4f}' for k, v in initial_metrics.items() if isinstance(v, float)]))
+    for train_idx, val_idx in skf.split(features_np, labels_np):
+        fold += 1
+        X_train_fold, X_val_fold = features_np[train_idx], features_np[val_idx]
+        y_train_fold, y_val_fold = labels_np[train_idx], labels_np[val_idx]
+        noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
 
-    # Record the initial metrics
-    with open(txtfile, "a", newline='', encoding='utf-8') as csvfile:  
-        writer = csv.DictWriter(csvfile, fieldnames=header_fields)
-        writer.writerow(initial_metrics)
+        train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
+        val_dataset = CICIDSDataset(X_val_fold, y_val_fold, noise_or_not_val)
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-    # Training loop
-    for epoch in range(1, args.n_epoch):
-        # Training routine
-        clf1.train()
-        adjust_learning_rate(optimizer1, epoch)
-        criterion = nn.CrossEntropyLoss()
+        model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
+        model.apply(weights_init)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        criterion = CrossEntropyLoss()
 
-        train_acc = train(train_loader, clf1, optimizer1, criterion, epoch)
+        for epoch in range(1, args.n_epoch + 1):
+            # Training process (assume defined elsewhere)
+            train(train_loader, model, optimizer, criterion, epoch)
+            metrics = evaluate(val_loader, model, label_encoder, args)
 
-        # Re-evaluate after training
-        metrics = evaluate(test_loader, clf1, label_encoder, args)
-        print(f'Epoch {epoch}/{args.n_epoch} - Test Metrics: ' + ', '.join([f'{k}: {v:.4f}' for k, v in metrics.items() if isinstance(v, float)]))
+            # Logging to CSV
+            metrics.update({'Fold': fold, 'Epoch': epoch})
+            with open(txtfile, "a", newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writerow(metrics)
 
-        # Write metrics to CSV
-        with open(txtfile, "a", newline='') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=header_fields)
-            writer.writerow(metrics)
+        results.append(metrics)
+
+    print("Training completed. Results from all folds:")
+    for i, result in enumerate(results, 1):
+        print(f'Results Fold {i}:', result)
 
 if __name__ == '__main__':
     main()
