@@ -59,7 +59,7 @@ parser.add_argument('--forget_rate', type=float, help='forget rate', default=Non
 parser.add_argument('--noise_type', type=str, help='[pairflip, symmetric]', default='symmetric')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=150)
+parser.add_argument('--n_epoch', type=int, default=15)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=1)
@@ -68,6 +68,7 @@ parser.add_argument('--epoch_decay_start', type=int, default=80)
 parser.add_argument('--model_type', type=str, help='[coteaching, coteaching_plus]', default='baseline')
 parser.add_argument('--fr_type', type=str, help='forget rate type', default='type_1')
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default=None, help='Data augmentation technique, if any')
+parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 
 args = parser.parse_args()
 
@@ -135,6 +136,38 @@ def introduce_label_noise(labels, noise_rate=args.noise_rate):
     return labels, noise_or_not
 
 
+def apply_imbalance(features, labels, ratio):
+    if ratio == 0:
+        print("No imbalance applied as ratio is 0.")
+        return features, labels
+
+    if ratio >= 1:
+        raise ValueError("Imbalance ratio must be less than 1.")
+
+    # Identify the unique classes and their counts
+    unique, counts = np.unique(labels, return_counts=True)
+    minority_class = unique[np.argmin(counts)]
+    n_minority = np.min(counts)  # Number of samples in the smallest class
+    
+    # Calculate the new size for other classes based on the ratio
+    n_majority_new = int(n_minority * ratio)  # Ensure ratio is not zero or greater than 1
+    
+    indices_to_keep = []
+
+    for cls in unique:
+        class_indices = np.where(labels == cls)[0]
+        if len(class_indices) > n_majority_new:
+            keep_indices = np.random.choice(class_indices, n_majority_new, replace=False)
+        else:
+            keep_indices = class_indices  # Keep all samples if the class count is below the target
+        indices_to_keep.extend(keep_indices)
+
+    indices_to_keep = np.array(indices_to_keep)
+    np.random.shuffle(indices_to_keep)  # Shuffle indices to mix classes
+    
+    return features[indices_to_keep], labels[indices_to_keep]
+
+
 # Adjust learning rate and betas for Adam Optimizer
 mom1 = 0.9
 mom2 = 0.1
@@ -163,7 +196,7 @@ save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
 if not os.path.exists(save_dir):
     os.system('mkdir -p %s' % save_dir)
 
-model_str = args.model_type + '_' + args.dataset + '_%s_' % args.data_augmentation + '_' + str(args.noise_rate)
+model_str = f"{args.model_type}_{args.dataset}_{args.data_augmentation if args.data_augmentation else 'no augmentation'}_noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
 
 txtfile = save_dir + "/" + model_str + ".csv"
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -304,7 +337,8 @@ def evaluate(test_loader, model, label_encoder, args):
     dataset_formatted = args.dataset.capitalize()
     data_augmentation_display = "No Data Augmentation" if args.data_augmentation is None or args.data_augmentation.lower() == 'none' else args.data_augmentation.capitalize()
 
-    title = f"{model_type_formatted} on {dataset_formatted} with {data_augmentation_display}, Noise Rate: {args.noise_rate}"
+    title = f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with {args.data_augmentation.capitalize() if args.data_augmentation else 'No Augmentation'}, Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}"
+    
     sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14}, linewidths=0.75, linecolor='black')    
     plt.xticks(rotation=45, ha='right', fontsize=14)  
     plt.yticks(rotation=45, va='top', fontsize=14)
@@ -322,7 +356,7 @@ def evaluate(test_loader, model, label_encoder, args):
     if not os.path.exists(matrix_dir):
         os.makedirs(matrix_dir)
     
-    matrix_filename = f"{args.dataset}_{args.noise_rate}_{args.data_augmentation.replace(' ', '_').lower()}_confusion_matrix.png"
+    matrix_filename = f"{model_str}_confusion_matrix.png"
     plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight', dpi=300)
     plt.close()
 
@@ -398,7 +432,11 @@ def main():
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
 
-    features_np, labels_np = apply_data_augmentation(X_train, y_train, args.data_augmentation)
+
+    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train,  args.imbalance_ratio)
+    features_np, labels_np = apply_data_augmentation(X_train_imbalanced, y_train_imbalanced, args.data_augmentation)
+
+
     labels_np, noise_or_not = introduce_label_noise(labels_np, noise_rate=args.noise_rate)
 
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
