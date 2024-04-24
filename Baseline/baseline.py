@@ -70,6 +70,7 @@ parser.add_argument('--model_type', type=str, help='[coteaching, coteaching_plus
 parser.add_argument('--fr_type', type=str, help='forget rate type', default='type_1')
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default=None, help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
+parser.add_argument('--use_weight_resampling', action='store_true', help='Enable weight resampling method')
 
 args = parser.parse_args()
 
@@ -288,39 +289,41 @@ def accuracy(logit, target, topk=(1,)):
     return res
 
 
-def train(train_loader, model, optimizer, criterion, epoch):
-    print('Training...')
+def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_weight_resampling=False):
     model.train()  # Set model to training mode
     train_total = 0
     train_correct = 0
+    total_loss = 0
 
     for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
-        # Forward pass: Compute predicted outputs by passing inputs to the model
         logits = model(data)
 
-        # Calculate the batch's accuracy
+        # Compute the standard CrossEntropyLoss
+        loss = criterion(logits, labels)
+        
+        # Apply weights manually if weight resampling is enabled
+        if use_weight_resampling:
+            weights = compute_weights(labels, no_of_classes=no_of_classes)
+            loss = (loss * weights).mean() 
+
+        # Backward pass and optimization
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
         _, predicted = torch.max(logits.data, 1)
         train_total += labels.size(0)
         train_correct += (predicted == labels).sum().item()
+        total_loss += loss.item()
 
-        # Calculate the loss
-        loss = criterion(logits, labels)
-
-        # Zero the gradients
-        optimizer.zero_grad()
-
-        # Backward pass: compute gradient of the loss with respect to model parameters
-        loss.backward()
-
-        # Perform a single optimization step (parameter update)
-        optimizer.step()
         if (i + 1) % args.print_freq == 0:
             print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
-                  % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, loss.item()))
+                  % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
 
     train_acc = 100. * train_correct / train_total
     return train_acc
+
 
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
@@ -390,8 +393,10 @@ def evaluate(test_loader, model, label_encoder, args):
         'precision_macro': precision_score(all_labels, all_preds, average='macro', zero_division=0),
         'recall_macro': recall_score(all_labels, all_preds, average='macro', zero_division=0),
         'f1_micro': f1_score(all_labels, all_preds, average='micro', zero_division=0),
-        'f1_macro': f1_score(all_labels, all_preds, average='macro', zero_division=0)
+        'f1_macro': f1_score(all_labels, all_preds, average='macro', zero_division=0),
+        'f1_average': np.mean(f1_score(all_labels, all_preds, average=None, zero_division=0))  # Average F1 score
     }
+
 
      # Class accuracy
     if args.dataset == 'CIC_IDS_2017':
@@ -424,7 +429,9 @@ def evaluate(test_loader, model, label_encoder, args):
     cm = confusion_matrix(all_labels, all_preds, normalize='true')
     plt.figure(figsize=(12, 10))
 
-    title = f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with {'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()}, Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}"
+    resampling_status = 'weight_resampling' if args.use_weight_resampling else 'no_weight_resampling'
+
+    title = f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with {'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()}, Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}, {resampling_status.capitalize()}"
 
     ax = sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})    
 
@@ -503,6 +510,31 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 
+def compute_weights(labels, no_of_classes, beta=0.9999):
+    # Count each class's occurrence
+    samples_per_class = np.bincount(labels.cpu().numpy(), minlength=no_of_classes)
+
+    # Avoid division by zero
+    samples_per_class = np.where(samples_per_class == 0, 1, samples_per_class)
+    
+    # Compute weights using the class-balanced loss formula from the paper
+    effective_num = 1.0 - np.power(beta, samples_per_class)
+    weights = (1.0 - beta) / np.array(effective_num)
+
+    # Normalize the weights such that their sum equals the number of classes
+    weights = weights / np.sum(weights) * no_of_classes
+
+    # Convert the weights to a PyTorch tensor
+    weights = torch.tensor(weights, dtype=torch.float, device='cuda:0')
+
+    # Map weights to the corresponding labels
+    weight_per_label = weights[labels]
+
+    return weight_per_label
+
+
+
+
 def apply_data_augmentation(features, labels, augmentation_method):
     if augmentation_method == 'smote':
         return SMOTE(random_state=42).fit_resample(features, labels)
@@ -559,8 +591,9 @@ def main():
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
 
-    # Define the base filename for different outputs
-    base_filename = f"{args.model_type}_{args.dataset}_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
+    # Define the base filename with weight resampling status
+    resampling_status = 'weight_resampling' if args.use_weight_resampling else 'no_weight_resampling'
+    base_filename = f"{args.model_type}_{args.dataset}_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_noise{args.noise_rate}_imbalance{args.imbalance_ratio}_{resampling_status}"
 
     # File paths for CSV and model files
     validation_metrics_file = os.path.join(results_dir, f"{base_filename}_validation.csv")
@@ -572,16 +605,16 @@ def main():
     # Prepare CSV file for validation metrics
     with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'Class {label+1}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'{label}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'windows_pe_real':
             labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
                     "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
                     "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'{label}_acc' for label in labels]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
@@ -589,16 +622,16 @@ def main():
     # Prepare CSV file for validation metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'Class {label+1}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'{label}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'windows_pe_real':
             labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
                     "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
                     "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'{label}_acc' for label in labels]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
@@ -621,10 +654,13 @@ def main():
         model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
         model.apply(weights_init)
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
-        criterion = CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss()
+
 
         for epoch in range(args.n_epoch):
-            train(train_loader, model, optimizer, criterion, epoch)
+            no_of_classes = len(np.unique(y_train))  # Or directly set if known
+
+            train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_weight_resampling=args.use_weight_resampling)            
             metrics = evaluate(val_loader, model, label_encoder, args)
 
             # Update metrics with Fold and Epoch at the beginning
@@ -648,7 +684,9 @@ def main():
     full_criterion = CrossEntropyLoss()
 
     for epoch in range(args.n_epoch):
-        train(full_train_loader, full_model, full_optimizer, full_criterion, epoch)
+        no_of_classes = len(np.unique(y_train))  # Or directly set if known
+
+        train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_weight_resampling=args.use_weight_resampling)  
 
     full_metrics = evaluate(full_train_loader, full_model, label_encoder, args)
 
