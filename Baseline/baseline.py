@@ -577,10 +577,14 @@ def main():
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
 
+    # Apply imbalance to the dataset
     X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
-    features_np, labels_np = apply_data_augmentation(X_train_imbalanced, y_train_imbalanced, args.data_augmentation)
-    # After loading and potentially augmenting the data
-    labels_np, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+
+    # Introduce noise to the imbalanced data
+    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+
+    # Apply data augmentation to the noisy data
+    features_np, labels_np = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
 
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
