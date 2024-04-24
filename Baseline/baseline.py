@@ -348,7 +348,7 @@ def save_confusion_matrix(labels_true, labels_pred, label_encoder, directory, fi
     print(f"Confusion matrices saved: {filename}_raw.csv and {filename}_normalized.csv")
 
 
-def evaluate(test_loader, model, label_encoder, args):
+def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False):
     model.eval()
     all_preds = []
     all_labels = []
@@ -361,12 +361,6 @@ def evaluate(test_loader, model, label_encoder, args):
             _, preds = torch.max(outputs, 1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
-
-    # Ensure the results directory exists
-    matrix_dir = os.path.join(args.result_dir, 'confusion_matrices')
-    os.makedirs(matrix_dir, exist_ok=True)
-    save_confusion_matrix(all_labels, all_preds, label_encoder, args.result_dir, 'confusion_matrix')
-
 
     if args.dataset == 'CIC_IDS_2017':
         index_to_class_name = {i: label_encoder.inverse_transform([i])[0] for i in range(len(label_encoder.classes_))}
@@ -421,67 +415,68 @@ def evaluate(test_loader, model, label_encoder, args):
         metrics.update(class_accuracy)
 
 
+    if save_conf_matrix:
 
-    # Define colors
-    colors = ["#FFFFFF", "#B9F5F1", "#C8A8E2"]  
-    # Create a color map
-    cmap = LinearSegmentedColormap.from_list("custom_cmap", colors, N=256)    
-    cm = confusion_matrix(all_labels, all_preds, normalize='true')
-    plt.figure(figsize=(12, 10))
+        # Define colors
+        colors = ["#FFFFFF", "#B9F5F1", "#C8A8E2"]  
+        # Create a color map
+        cmap = LinearSegmentedColormap.from_list("custom_cmap", colors, N=256)    
+        cm = confusion_matrix(all_labels, all_preds, normalize='true')
+        plt.figure(figsize=(12, 10))
 
-    resampling_status = 'weight_resampling' if args.use_weight_resampling else 'no_weight_resampling'
+        resampling_status = 'weight_resampling' if args.use_weight_resampling else 'no_weight_resampling'
 
-    title = f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with {'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()}, Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}, {resampling_status.capitalize()}"
+        title = f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with {'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()}, Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}, {resampling_status.capitalize()}"
 
-    ax = sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})    
+        ax = sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})    
 
-    # Generate custom tick labels (arrow symbol) for the number of classes
-    tick_labels1 = [f"{name}" for name in cleaned_class_names]    
-    tick_labels2 = [f"{name}" for name in cleaned_class_names]  
+        # Generate custom tick labels (arrow symbol) for the number of classes
+        tick_labels1 = [f"{name}" for name in cleaned_class_names]    
+        tick_labels2 = [f"{name}" for name in cleaned_class_names]  
+
+        
+        ax.set_xticklabels(tick_labels1, rotation=90)  # Set rotation for x-axis labels
+        ax.set_yticklabels(tick_labels2, rotation=0)  # Align y-axis labels
+        ax.tick_params(left=False, bottom=False, pad=10)
+
+
+        # Define Unicode characters for ticks
+        unicode_symbol_x = chr(0x25B6)  # Black right-pointing triangle
+        unicode_symbol_y = chr(0x25B2)  # Black up-pointing triangle
+
+        # Get current tick locations
+        xticks = ax.get_xticks()
+        yticks = ax.get_yticks()
+
+        # Disable original ticks
+        ax.tick_params(length=0)  # Hide tick lines
 
     
-    ax.set_xticklabels(tick_labels1, rotation=90)  # Set rotation for x-axis labels
-    ax.set_yticklabels(tick_labels2, rotation=0)  # Align y-axis labels
-    ax.tick_params(left=False, bottom=False, pad=10)
+        for y in yticks:
+            ax.annotate(unicode_symbol_x, xy=(0, y), xycoords='data', xytext=(0, 0), textcoords='offset points', ha='right', va='center', fontsize=12, color='black')
+        # Overlay Unicode characters as custom tick marks
+        for x in xticks:
+            ax.annotate(unicode_symbol_y, xy=(x, y+0.5), xycoords='data', xytext=(0, 0), textcoords='offset points', ha='center', va='top', fontsize=12, color='black')
 
+        plt.xticks(rotation=45, ha='right', fontsize=14)  
+        plt.yticks(rotation=45, va='top', fontsize=14)
+        plt.xlabel('Predicted', fontsize=14, fontweight='bold')  
+        plt.ylabel('Actual', fontsize=14, fontweight='bold') 
+        plt.title(title, fontsize=14, fontweight='bold')
+        plt.tight_layout()
 
-    # Define Unicode characters for ticks
-    unicode_symbol_x = chr(0x25B6)  # Black right-pointing triangle
-    unicode_symbol_y = chr(0x25B2)  # Black up-pointing triangle
+        # Adding border around the color bar
+        cbar = plt.gca().collections[0].colorbar
+        cbar.outline.set_linewidth(1)
+        cbar.outline.set_edgecolor("black")
 
-    # Get current tick locations
-    xticks = ax.get_xticks()
-    yticks = ax.get_yticks()
-
-    # Disable original ticks
-    ax.tick_params(length=0)  # Hide tick lines
-
- 
-    for y in yticks:
-        ax.annotate(unicode_symbol_x, xy=(0, y), xycoords='data', xytext=(0, 0), textcoords='offset points', ha='right', va='center', fontsize=12, color='black')
-   # Overlay Unicode characters as custom tick marks
-    for x in xticks:
-        ax.annotate(unicode_symbol_y, xy=(x, y+0.5), xycoords='data', xytext=(0, 0), textcoords='offset points', ha='center', va='top', fontsize=12, color='black')
-
-    plt.xticks(rotation=45, ha='right', fontsize=14)  
-    plt.yticks(rotation=45, va='top', fontsize=14)
-    plt.xlabel('Predicted', fontsize=14, fontweight='bold')  
-    plt.ylabel('Actual', fontsize=14, fontweight='bold') 
-    plt.title(title, fontsize=14, fontweight='bold')
-    plt.tight_layout()
-
-    # Adding border around the color bar
-    cbar = plt.gca().collections[0].colorbar
-    cbar.outline.set_linewidth(1)
-    cbar.outline.set_edgecolor("black")
-
-    matrix_dir = os.path.join(args.result_dir, 'confusion_matrix')
-    if not os.path.exists(matrix_dir):
-        os.makedirs(matrix_dir)
-    
-    matrix_filename = f"{model_str}_confusion_matrix.png"
-    plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight', dpi=300)
-    plt.close()
+        matrix_dir = os.path.join(args.result_dir, 'confusion_matrix')
+        if not os.path.exists(matrix_dir):
+            os.makedirs(matrix_dir)
+        
+        matrix_filename = f"{model_str}_confusion_matrix.png"
+        plt.savefig(os.path.join(matrix_dir, matrix_filename), bbox_inches='tight', dpi=300)
+        plt.close()
 
     return metrics
 
@@ -661,7 +656,7 @@ def main():
             no_of_classes = len(np.unique(y_train))  # Or directly set if known
 
             train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_weight_resampling=args.use_weight_resampling)            
-            metrics = evaluate(val_loader, model, label_encoder, args)
+            metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
 
             # Update metrics with Fold and Epoch at the beginning
             row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
@@ -686,9 +681,9 @@ def main():
     for epoch in range(args.n_epoch):
         no_of_classes = len(np.unique(y_train))  # Or directly set if known
 
-        train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_weight_resampling=args.use_weight_resampling)  
+        train(train_loader, full_model, full_optimizer, full_criterion, epoch, no_of_classes, use_weight_resampling=args.use_weight_resampling)  
 
-    full_metrics = evaluate(full_train_loader, full_model, label_encoder, args)
+    full_metrics = evaluate(full_train_loader, full_model, label_encoder, args, save_conf_matrix=True)
 
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=full_metrics.keys())
