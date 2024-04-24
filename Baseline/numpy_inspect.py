@@ -1,43 +1,71 @@
 import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+import os
 
 def inspect_and_compare(npz_file_path1, npz_file_path2):
     with np.load(npz_file_path1) as data1, np.load(npz_file_path2) as data2:
-        print(f"Inspecting '{npz_file_path1}'")
-        for key in data1.files:
-            print(f"Key: {key}, Shape of array: {data1[key].shape}")
-
-        print(f"Inspecting '{npz_file_path2}'")
-        for key in data2.files:
-            print(f"Key: {key}, Shape of array: {data2[key].shape}")
-
-        # Compare labels
         y_train1 = data1['y_train']
         y_train2 = data2['y_train']
-        y_test1 = data1['y_test']
-        y_test2 = data2['y_test']
 
-        # Print unique labels and their counts
-        unique_labels1, counts1 = np.unique(y_train1, return_counts=True)
-        unique_labels2, counts2 = np.unique(y_train2, return_counts=True)
-        unique_test_labels1, test_counts1 = np.unique(y_test1, return_counts=True)
-        unique_test_labels2, test_counts2 = np.unique(y_test2, return_counts=True)
+        # Calculate noise transition matrix
+        num_classes = len(np.unique(y_train2))
+        transition_matrix = np.zeros((num_classes, num_classes))
 
-        print("Unique labels and counts in y_train1:", dict(zip(unique_labels1, counts1)))
-        print("Unique labels and counts in y_train2:", dict(zip(unique_labels2, counts2)))
-        print("Unique labels and counts in y_test1:", dict(zip(unique_test_labels1, test_counts1)))
-        print("Unique labels and counts in y_test2:", dict(zip(unique_test_labels2, test_counts2)))
+        for i in range(len(y_train1)):
+            actual_label = y_train2[i]
+            noisy_label = y_train1[i]
+            transition_matrix[actual_label][noisy_label] += 1
 
-        print("Sample data comparison, y_train1 vs y_train2:", np.array_equal(y_train1[:10], y_train2[:10]))
-        print("Sample data comparison, y_test1 vs y_test2:", np.array_equal(y_test1[:10], y_test2[:10]))
+        # Normalize the rows to create probabilities
+        row_sums = transition_matrix.sum(axis=1, keepdims=True)
+        transition_matrix = transition_matrix / row_sums
+        
+        return transition_matrix
 
-        print("Mean and std of y_train1:", np.mean(y_train1), np.std(y_train1))
-        print("Mean and std of y_train2:", np.mean(y_train2), np.std(y_train2))
+def save_and_visualize_matrix(transition_matrix, matrix_file_path, image_file_path):
+    # Save the matrix to a file with high precision
+    np.savetxt(matrix_file_path, transition_matrix, fmt='%.6f')
+
+    # Define colors
+    colors = ["#FFFFFF", "#B9F5F1", "#C8A8E2"]
+    # Create a color map
+    cmap = LinearSegmentedColormap.from_list("custom_cmap", colors, N=256)
+    
+    plt.figure(figsize=(12, 10))
+    ax = sns.heatmap(transition_matrix, annot=True, fmt=".3f", cmap=cmap, annot_kws={"fontsize": 12}, linewidths=0)
+
+    # Generate custom tick labels (arrow symbol) for the number of classes
+    tick_labels = [chr(0x27A4) for _ in range(transition_matrix.shape[0])]
+    
+    ax.set_xticklabels(tick_labels, rotation=90)  # Set rotation for x-axis labels
+    ax.set_yticklabels(tick_labels, rotation=0)  # Align y-axis labels
+    ax.tick_params(left=False, bottom=False)
+
+    # # Ensure the number of ticks match the number of classes
+    # ax.xaxis.set_major_locator(plt.FixedLocator(np.arange(len(tick_labels))))
+    # ax.yaxis.set_major_locator(plt.FixedLocator(np.arange(len(tick_labels))))
+
+    plt.xlabel('Predicted', fontsize=14, fontweight='bold')
+    plt.ylabel('Actual', fontsize=14, fontweight='bold')
+    plt.title('Noise Transition Matrix', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+
+    # Save the figure
+    if not os.path.exists(os.path.dirname(image_file_path)):
+        os.makedirs(os.path.dirname(image_file_path))
+
+    plt.savefig(image_file_path, bbox_inches='tight', dpi=300)
+    plt.close()
+
+
+
 
 # Usage
 file1 = 'data/Windows_PE/real_world/malware.npz'
 file2 = 'data/Windows_PE/real_world/malware_true.npz'
-inspect_and_compare(file1, file2)
-
-file3 = 'data/Windows_PE/synthetic/malware.npz'
-file4 = 'data/Windows_PE/synthetic/malware_true.npz'
-inspect_and_compare(file3, file4)
+matrix = inspect_and_compare(file1, file2)
+matrix_file_path = 'results/noise_transition_matrix.txt'
+image_file_path = 'results/noise_transition_matrix.png'
+save_and_visualize_matrix(matrix, matrix_file_path, image_file_path)
