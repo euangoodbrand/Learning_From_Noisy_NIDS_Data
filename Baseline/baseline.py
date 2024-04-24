@@ -57,10 +57,10 @@ parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
 parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
-parser.add_argument('--noise_type', type=str, help='[pairflip, symmetric]', default='symmetric')
+parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=10)
+parser.add_argument('--n_epoch', type=int, default=150)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=1)
@@ -114,8 +114,65 @@ if args.forget_rate is None:
 else:
     forget_rate=args.forget_rate
 
+def introduce_noise(labels, features, noise_type, noise_rate):
+    if noise_type == 'uniform':
+        return introduce_uniform_noise(labels, noise_rate)
+    elif noise_type == 'class':
+        num_classes = len(np.unique(labels))
+        class_noise_matrix = create_class_dependent_noise_matrix(num_classes, noise_rate)
+        return introduce_class_dependent_label_noise(labels, class_noise_matrix)
+    elif noise_type == 'feature':
+        thresholds = calculate_feature_thresholds(features)
+        return introduce_feature_dependent_label_noise(labels, features, thresholds, noise_rate)
+    else:
+        raise ValueError("Invalid noise type specified.")
 
-def introduce_label_noise(labels, noise_rate=args.noise_rate):
+
+def create_class_dependent_noise_matrix(num_classes, noise_rate):
+    matrix = np.full((num_classes, num_classes), noise_rate / (num_classes - 1))
+    np.fill_diagonal(matrix, 1 - noise_rate)  # Higher probability for correct labels
+    matrix /= matrix.sum(axis=1, keepdims=True)
+    return matrix
+
+def introduce_class_dependent_label_noise(labels, class_noise_matrix):
+    n_samples = len(labels)
+    new_labels = labels.copy()
+    for i in range(n_samples):
+        original_class = labels[i]
+        new_labels[i] = np.random.choice(np.arange(len(class_noise_matrix)), p=class_noise_matrix[original_class])
+    noise_or_not = new_labels != labels
+    return new_labels, noise_or_not
+
+def calculate_feature_thresholds(features):
+    # Calculate thresholds for each feature, assuming features is a 2D array
+    thresholds = np.percentile(features, 50, axis=0)  # Median as threshold for each feature
+    return thresholds
+
+
+
+def introduce_feature_dependent_label_noise(labels, features, thresholds, noise_rate):
+    n_samples = len(labels)
+    new_labels = labels.copy()
+    # Ensure thresholds and features are of compatible shapes
+    print("Thresholds:", thresholds)  # Debugging print
+    print("Features shape:", features.shape)  # Debugging print
+
+    for i in range(n_samples):
+        feature = features[i]
+        # Implement comparison for each feature against its corresponding threshold
+        condition = feature > thresholds  # This should be an array of booleans now
+
+        # Use noise_rate to decide if label should be flipped based on any feature exceeding its threshold
+        if np.any(condition):  # Change to any() to apply noise if any feature exceeds its threshold
+            if np.random.rand() < noise_rate:
+                possible_labels = np.delete(np.arange(len(np.unique(labels))), labels[i])
+                new_labels[i] = np.random.choice(possible_labels)
+                
+    noise_or_not = new_labels != labels
+    return new_labels, noise_or_not
+
+
+def introduce_uniform_noise(labels, noise_rate=args.noise_rate):
     n_samples = len(labels)
     n_noisy = int(noise_rate * n_samples)
     noisy_indices = np.random.choice(np.arange(n_samples), size=n_noisy, replace=False)
@@ -137,7 +194,7 @@ def introduce_label_noise(labels, noise_rate=args.noise_rate):
     return labels, noise_or_not
 
 
-def apply_imbalance(features, labels, ratio):
+def apply_imbalance(features, labels, ratio, downsample_half=True):
     if ratio == 0:
         print("No imbalance applied as ratio is 0.")
         return features, labels
@@ -147,20 +204,30 @@ def apply_imbalance(features, labels, ratio):
 
     # Identify the unique classes and their counts
     unique, counts = np.unique(labels, return_counts=True)
-    minority_class = unique[np.argmin(counts)]
-    n_minority = np.min(counts)  # Number of samples in the smallest class
+    n_classes = len(unique)
     
-    # Calculate the new size for other classes based on the ratio
-    n_majority_new = int(n_minority * ratio)  # Ensure ratio is not zero or greater than 1
-    
-    indices_to_keep = []
+    # Determine which classes to downsample
+    # Example: Downsample the first half of the sorted unique classes
+    if downsample_half:
+        downsample_classes = unique[:n_classes // 2]
+    else:
+        downsample_classes = unique
 
+    indices_to_keep = []
     for cls in unique:
         class_indices = np.where(labels == cls)[0]
-        if len(class_indices) > n_majority_new:
-            keep_indices = np.random.choice(class_indices, n_majority_new, replace=False)
+        if cls in downsample_classes:
+            # Downsample these classes
+            n_minority = np.min(counts)  # Use the smallest class count as the base for downsampling
+            n_majority_new = int(n_minority * ratio)
+            if len(class_indices) > n_majority_new:
+                keep_indices = np.random.choice(class_indices, n_majority_new, replace=False)
+            else:
+                keep_indices = class_indices  # Keep all samples if class count is below the target
         else:
-            keep_indices = class_indices  # Keep all samples if the class count is below the target
+            # Keep all samples from the classes not being downsampled
+            keep_indices = class_indices
+        
         indices_to_keep.extend(keep_indices)
 
     indices_to_keep = np.array(indices_to_keep)
@@ -262,6 +329,22 @@ def clean_class_name(class_name):
     cleaned_name = re.sub(r'\bweb attack\b', '', cleaned_name, flags=re.IGNORECASE)
     return cleaned_name.strip()  # Strip leading/trailing spaces
 
+def save_confusion_matrix(labels_true, labels_pred, label_encoder, directory, filename):
+    # Compute the confusion matrix
+    cm = confusion_matrix(labels_true, labels_pred)
+    
+    # Normalize the confusion matrix to create a transition probability matrix
+    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    
+    # Save the raw confusion matrix
+    pd.DataFrame(cm).to_csv(os.path.join(directory, f"{filename}_raw.csv"), index=False)
+    
+    # Save the normalized confusion matrix (transition matrix)
+    pd.DataFrame(cm_normalized).to_csv(os.path.join(directory, f"{filename}_normalized.csv"), index=False)
+    
+    print(f"Confusion matrices saved: {filename}_raw.csv and {filename}_normalized.csv")
+
+
 def evaluate(test_loader, model, label_encoder, args):
     model.eval()
     all_preds = []
@@ -275,6 +358,12 @@ def evaluate(test_loader, model, label_encoder, args):
             _, preds = torch.max(outputs, 1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
+
+    # Ensure the results directory exists
+    matrix_dir = os.path.join(args.result_dir, 'confusion_matrices')
+    os.makedirs(matrix_dir, exist_ok=True)
+    save_confusion_matrix(all_labels, all_preds, label_encoder, args.result_dir, 'confusion_matrix')
+
 
     if args.dataset == 'CIC_IDS_2017':
         index_to_class_name = {i: label_encoder.inverse_transform([i])[0] for i in range(len(label_encoder.classes_))}
@@ -326,6 +415,8 @@ def evaluate(test_loader, model, label_encoder, args):
         }
         metrics.update(class_accuracy)
 
+
+
     # Define colors
     colors = ["#FFFFFF", "#B9F5F1", "#C8A8E2"]  
     # Create a color map
@@ -335,7 +426,36 @@ def evaluate(test_loader, model, label_encoder, args):
 
     title = f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with {'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()}, Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}"
 
-    sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14}, linewidths=0.75, linecolor='black')    
+    ax = sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})    
+
+    # Generate custom tick labels (arrow symbol) for the number of classes
+    tick_labels1 = [f"{name}" for name in cleaned_class_names]    
+    tick_labels2 = [f"{name}" for name in cleaned_class_names]  
+
+    
+    ax.set_xticklabels(tick_labels1, rotation=90)  # Set rotation for x-axis labels
+    ax.set_yticklabels(tick_labels2, rotation=0)  # Align y-axis labels
+    ax.tick_params(left=False, bottom=False, pad=10)
+
+
+    # Define Unicode characters for ticks
+    unicode_symbol_x = chr(0x25B6)  # Black right-pointing triangle
+    unicode_symbol_y = chr(0x25B2)  # Black up-pointing triangle
+
+    # Get current tick locations
+    xticks = ax.get_xticks()
+    yticks = ax.get_yticks()
+
+    # Disable original ticks
+    ax.tick_params(length=0)  # Hide tick lines
+
+ 
+    for y in yticks:
+        ax.annotate(unicode_symbol_x, xy=(0, y), xycoords='data', xytext=(0, 0), textcoords='offset points', ha='right', va='center', fontsize=12, color='black')
+   # Overlay Unicode characters as custom tick marks
+    for x in xticks:
+        ax.annotate(unicode_symbol_y, xy=(x, y+0.5), xycoords='data', xytext=(0, 0), textcoords='offset points', ha='center', va='top', fontsize=12, color='black')
+
     plt.xticks(rotation=45, ha='right', fontsize=14)  
     plt.yticks(rotation=45, va='top', fontsize=14)
     plt.xlabel('Predicted', fontsize=14, fontweight='bold')  
@@ -432,7 +552,8 @@ def main():
 
     X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
     features_np, labels_np = apply_data_augmentation(X_train_imbalanced, y_train_imbalanced, args.data_augmentation)
-    labels_np, noise_or_not = introduce_label_noise(labels_np, noise_rate=args.noise_rate)
+    # After loading and potentially augmenting the data
+    labels_np, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
@@ -465,7 +586,7 @@ def main():
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        # Prepare CSV file for validation metrics
+    # Prepare CSV file for validation metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
             fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro'] + \
