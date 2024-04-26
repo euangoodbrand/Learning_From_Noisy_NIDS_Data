@@ -62,7 +62,7 @@ parser.add_argument('--forget_rate', type=float, help='forget rate', default=Non
 parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=10)
+parser.add_argument('--n_epoch', type=int, default=150)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=1)
@@ -307,23 +307,27 @@ def apply_imbalance(features, labels, ratio, downsample_half=True):
 
 
 
-def compute_weights(labels, no_of_classes, beta=0.9999):
+def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0):
     # Count each class's occurrence
     samples_per_class = np.bincount(labels.cpu().numpy(), minlength=no_of_classes)
 
     if args.weight_resampling == 'Naive':
         # Naive re-weighting: weights are inversely proportional to the class frequencies
         weights = 1.0 / samples_per_class
-        # Normalize the weights such that their sum equals the number of classes
-        weights = (weights / weights.sum()) * no_of_classes
     elif args.weight_resampling == 'Class-Balance':
         # Class-Balance re-weighting using the effective number of samples
         effective_num = 1.0 - np.power(beta, samples_per_class)
         weights = (1.0 - beta) / np.array(effective_num)
-        # Normalize the weights such that their sum equals the number of classes
-        weights = (weights / weights.sum()) * no_of_classes
+    elif args.weight_resampling == 'Focal':
+        # Focal re-weighting: Adjust weights based on class frequency and the focusing parameter gamma
+        initial_weights = 1.0 / samples_per_class  # Start with inverse frequency
+        focal_weights = initial_weights ** gamma  # Apply focal adjustment
+        weights = focal_weights
     else:
         raise ValueError("Unsupported weight computation method")
+
+    # Normalize the weights such that their sum equals the number of classes
+    weights = (weights / weights.sum()) * no_of_classes
 
     # Convert the weights to a PyTorch tensor
     weights = torch.tensor(weights, dtype=torch.float, device='cuda:0')
@@ -513,11 +517,18 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
 
         resampling_status = 'weight_resampling' if args.weight_resampling is not None else 'no_weight_resampling'
 
-        title = (f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with "
-         f"{'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()},\n"
-         f"{args.noise_type}-Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}, "
-         f"{args.weight_resampling}_{resampling_status.capitalize()}")
-
+        if args.weight_resampling:
+            title = (f"{args.model_type.capitalize()} on {args.dataset.capitalize()} dataset with "
+            f"{'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()},\n"
+            f"{args.weight_resampling}_{resampling_status.capitalize()},"
+            f"{args.noise_type}-Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}"
+            )
+        else: 
+            title = (f"{args.model_type.capitalize()} on {args.dataset.capitalize()} dataset with "
+            f"{'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()},\n"
+            f"{resampling_status.capitalize()},"
+            f"{args.noise_type}-Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}"
+            )
         ax = sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})    
 
         # Generate custom tick labels (arrow symbol) for the number of classes
@@ -666,7 +677,10 @@ def main():
 
     # Define the base filename with weight resampling status
     resampling_status = 'weight_resampling' if args.weight_resampling else 'no_weight_resampling'
-    base_filename = f"{args.model_type}_{args.dataset}_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_{args.weight_resampling}_{resampling_status}"
+    if args.weight_resampling:
+        base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{args.weight_resampling}_{resampling_status}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
+    else:
+        base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{resampling_status}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
 
     # File paths for CSV and model files
     validation_metrics_file = os.path.join(results_dir, f"{base_filename}_validation.csv")
