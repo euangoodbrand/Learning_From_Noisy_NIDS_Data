@@ -29,6 +29,8 @@ from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 )
 
+from sklearn.neighbors import NearestNeighbors
+
 # Imblearn Imports
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
@@ -53,14 +55,14 @@ pd.set_option('display.max_rows', None)
 nRowsRead = None 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--lr', type=float, default=0.0001)
+parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
 parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
-parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature'], default='uniform')
+parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=150)
+parser.add_argument('--n_epoch', type=int, default=10)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=1)
@@ -70,7 +72,7 @@ parser.add_argument('--model_type', type=str, help='[coteaching, coteaching_plus
 parser.add_argument('--fr_type', type=str, help='forget rate type', default='type_1')
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default=None, help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
-parser.add_argument('--use_weight_resampling', action='store_true', help='Enable weight resampling method')
+parser.add_argument('--weight_resampling', type=str, choices=['Naive', 'Focal', 'Class-Balance'], default=None, help='Select the weight resampling method if needed')
 
 args = parser.parse_args()
 
@@ -115,34 +117,89 @@ if args.forget_rate is None:
 else:
     forget_rate=args.forget_rate
 
+
 def introduce_noise(labels, features, noise_type, noise_rate):
     if noise_type == 'uniform':
         return introduce_uniform_noise(labels, noise_rate)
     elif noise_type == 'class':
-        num_classes = len(np.unique(labels))
-        class_noise_matrix = create_class_dependent_noise_matrix(num_classes, noise_rate)
-        return introduce_class_dependent_label_noise(labels, class_noise_matrix)
+        # Directly use the predefined matrix for class noise
+        return introduce_class_dependent_label_noise(labels, predefined_matrix, noise_rate)
     elif noise_type == 'feature':
         thresholds = calculate_feature_thresholds(features)
-        return introduce_feature_dependent_label_noise(labels, features, thresholds, noise_rate)
+        return introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5)
+    elif noise_type == 'MIMICRY':
+        # Directly use the predefined matrix for class noise
+        return introduce_mimicry_noise(labels, predefined_matrix, noise_rate)
     else:
         raise ValueError("Invalid noise type specified.")
 
 
-def create_class_dependent_noise_matrix(num_classes, noise_rate):
-    matrix = np.full((num_classes, num_classes), noise_rate / (num_classes - 1))
-    np.fill_diagonal(matrix, 1 - noise_rate)  # Higher probability for correct labels
-    matrix /= matrix.sum(axis=1, keepdims=True)
-    return matrix
+# Class dependant noise matrix, from previous evaluation run.
+predefined_matrix = np.array([
+    [0.8, 0.03, 0.01, 0.01, 0.06, 0.0, 0.0, 0.0, 0.07, 0.0, 0.02, 0.0],
+    [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.01, 0.0, 0.98, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.03, 0.0, 0.0, 0.94, 0.0, 0.0, 0.0, 0.0, 0.02, 0.01, 0.0, 0.0],
+    [0.0, 0.0, 0.01, 0.0, 0.99, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.03, 0.0, 0.0, 0.03, 0.0, 0.0, 0.94, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.99, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.99, 0.0],
+    [0.3, 0.0, 0.0, 0.03, 0.26, 0.0, 0.0, 0.0, 0.05, 0.0, 0.01, 0.35]
+])
 
-def introduce_class_dependent_label_noise(labels, class_noise_matrix):
+# MIMICRY matrix for windows pe created from windows clean and noisy data
+noise_transition_matrix = np.array([
+    [0.534045, 0.005340, 0.001335, 0.012016, 0.093458, 0.006676, 0.009346, 0.016021, 0.088117, 0.072096, 0.125501, 0.036048],
+    [0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.501524, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.498476, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.995006, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.004994],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.006250, 0.000000, 0.006250, 0.000000, 0.000000, 0.000000, 0.987500, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.019231, 0.730769, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.250000]
+])
+
+
+
+def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
     n_samples = len(labels)
-    new_labels = labels.copy()
-    for i in range(n_samples):
-        original_class = labels[i]
-        new_labels[i] = np.random.choice(np.arange(len(class_noise_matrix)), p=class_noise_matrix[original_class])
-    noise_or_not = new_labels != labels
+    n_noisy = int(n_samples * noise_rate)  # Calculate the number of samples to corrupt based on the noise rate
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)  # Randomly select indices to corrupt
+
+    new_labels = labels.copy()  # Copy the original labels
+    noise_or_not = np.zeros(n_samples, dtype=bool)  # Initialize a mask to track noisy samples
+
+    for idx in noisy_indices:
+        original_class = labels[idx]
+        # Choose a new label based on the probability distribution from the matrix for the original class
+        new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
+        noise_or_not[idx] = new_labels[idx] != labels[idx]  # Update the noise tracking mask
+
     return new_labels, noise_or_not
+
+def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
+    n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)  # Calculate the number of samples to corrupt based on the noise rate
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)  # Randomly select indices to corrupt
+
+    new_labels = labels.copy()  # Copy the original labels
+    noise_or_not = np.zeros(n_samples, dtype=bool)  # Initialize a mask to track noisy samples
+
+    for idx in noisy_indices:
+        original_class = labels[idx]
+        # Choose a new label based on the probability distribution from the matrix for the original class
+        new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
+        noise_or_not[idx] = new_labels[idx] != labels[idx]  # Update the noise tracking mask
+
+    return new_labels, noise_or_not
+
 
 def calculate_feature_thresholds(features):
     # Calculate thresholds for each feature, assuming features is a 2D array
@@ -150,26 +207,38 @@ def calculate_feature_thresholds(features):
     return thresholds
 
 
-
-def introduce_feature_dependent_label_noise(labels, features, thresholds, noise_rate):
+def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5):
+    # Initialize the nearest neighbors finder
+    knn = NearestNeighbors(n_neighbors=n_neighbors + 1)  # +1 because the point itself is included
+    knn.fit(features)
+    
+    # Find the k-nearest neighbors (including the point itself)
+    distances, indices = knn.kneighbors(features)
+    
+    # Determine the indices that should be noisy
     n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)
+    noisy_indices = np.random.choice(n_samples, n_noisy, replace=False)
+
+    # Copy labels to prepare for noise introduction
     new_labels = labels.copy()
-    # Ensure thresholds and features are of compatible shapes
-    print("Thresholds:", thresholds)  # Debugging print
-    print("Features shape:", features.shape)  # Debugging print
+    noise_or_not = np.zeros(n_samples, dtype=bool)
 
-    for i in range(n_samples):
-        feature = features[i]
-        # Implement comparison for each feature against its corresponding threshold
-        condition = feature > thresholds  # This should be an array of booleans now
+    for i in noisy_indices:
+        # Get the indices of the neighbors excluding the point itself
+        neighbor_indices = indices[i][1:]  # skip the first index because it is the point itself
+        neighbor_classes = labels[neighbor_indices]
+        
+        # Identify neighbors with different class labels
+        different_class_neighbors = neighbor_indices[neighbor_classes != labels[i]]
+        
+        if len(different_class_neighbors) > 0:
+            # Randomly choose one of the different class neighbors
+            chosen_neighbor = np.random.choice(different_class_neighbors)
+            new_label = labels[chosen_neighbor]
+            new_labels[i] = new_label
+            noise_or_not[i] = True if new_label != labels[i] else False
 
-        # Use noise_rate to decide if label should be flipped based on any feature exceeding its threshold
-        if np.any(condition):  # Change to any() to apply noise if any feature exceeds its threshold
-            if np.random.rand() < noise_rate:
-                possible_labels = np.delete(np.arange(len(np.unique(labels))), labels[i])
-                new_labels[i] = np.random.choice(possible_labels)
-                
-    noise_or_not = new_labels != labels
     return new_labels, noise_or_not
 
 
@@ -237,6 +306,36 @@ def apply_imbalance(features, labels, ratio, downsample_half=True):
     return features[indices_to_keep], labels[indices_to_keep]
 
 
+
+def compute_weights(labels, no_of_classes, beta=0.9999):
+    # Count each class's occurrence
+    samples_per_class = np.bincount(labels.cpu().numpy(), minlength=no_of_classes)
+
+    if args.weight_resampling == 'Naive':
+        # Naive re-weighting: weights are inversely proportional to the class frequencies
+        weights = 1.0 / samples_per_class
+        # Normalize the weights such that their sum equals the number of classes
+        weights = (weights / weights.sum()) * no_of_classes
+    elif args.weight_resampling == 'Class-Balance':
+        # Class-Balance re-weighting using the effective number of samples
+        effective_num = 1.0 - np.power(beta, samples_per_class)
+        weights = (1.0 - beta) / np.array(effective_num)
+        # Normalize the weights such that their sum equals the number of classes
+        weights = (weights / weights.sum()) * no_of_classes
+    else:
+        raise ValueError("Unsupported weight computation method")
+
+    # Convert the weights to a PyTorch tensor
+    weights = torch.tensor(weights, dtype=torch.float, device='cuda:0')
+
+    # Map weights to the corresponding labels to assign each label its corresponding weight
+    weight_per_label = weights[labels]
+
+    return weight_per_label
+
+
+
+
 # Adjust learning rate and betas for Adam Optimizer
 mom1 = 0.9
 mom2 = 0.1
@@ -265,7 +364,7 @@ save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
 if not os.path.exists(save_dir):
     os.system('mkdir -p %s' % save_dir)
 
-model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
+model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
 
 txtfile = save_dir + "/" + model_str + ".csv"
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -289,7 +388,7 @@ def accuracy(logit, target, topk=(1,)):
     return res
 
 
-def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_weight_resampling=False):
+def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
     model.train()  # Set model to training mode
     train_total = 0
     train_correct = 0
@@ -303,7 +402,7 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_w
         loss = criterion(logits, labels)
         
         # Apply weights manually if weight resampling is enabled
-        if use_weight_resampling:
+        if args.weight_resampling is not None:
             weights = compute_weights(labels, no_of_classes=no_of_classes)
             loss = (loss * weights).mean() 
 
@@ -332,23 +431,7 @@ def clean_class_name(class_name):
     cleaned_name = re.sub(r'\bweb attack\b', '', cleaned_name, flags=re.IGNORECASE)
     return cleaned_name.strip()  # Strip leading/trailing spaces
 
-def save_confusion_matrix(labels_true, labels_pred, label_encoder, directory, filename):
-    # Compute the confusion matrix
-    cm = confusion_matrix(labels_true, labels_pred)
-    
-    # Normalize the confusion matrix to create a transition probability matrix
-    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-    
-    # Save the raw confusion matrix
-    pd.DataFrame(cm).to_csv(os.path.join(directory, f"{filename}_raw.csv"), index=False)
-    
-    # Save the normalized confusion matrix (transition matrix)
-    pd.DataFrame(cm_normalized).to_csv(os.path.join(directory, f"{filename}_normalized.csv"), index=False)
-    
-    print(f"Confusion matrices saved: {filename}_raw.csv and {filename}_normalized.csv")
-
-
-def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False):
+def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, return_predictions=False):
     model.eval()
     all_preds = []
     all_labels = []
@@ -361,6 +444,9 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False):
             _, preds = torch.max(outputs, 1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
+
+    if return_predictions:
+        return all_preds
 
     if args.dataset == 'CIC_IDS_2017':
         index_to_class_name = {i: label_encoder.inverse_transform([i])[0] for i in range(len(label_encoder.classes_))}
@@ -422,11 +508,15 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False):
         # Create a color map
         cmap = LinearSegmentedColormap.from_list("custom_cmap", colors, N=256)    
         cm = confusion_matrix(all_labels, all_preds, normalize='true')
+        print(cm)
         plt.figure(figsize=(12, 10))
 
-        resampling_status = 'weight_resampling' if args.use_weight_resampling else 'no_weight_resampling'
+        resampling_status = 'weight_resampling' if args.weight_resampling is not None else 'no_weight_resampling'
 
-        title = f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with {'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()}, Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}, {resampling_status.capitalize()}"
+        title = (f"{args.model_type.capitalize()} on {args.dataset.capitalize()} with "
+         f"{'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()},\n"
+         f"{args.noise_type}-Noise Rate: {args.noise_rate}, Imbalance Ratio: {args.imbalance_ratio}, "
+         f"{args.weight_resampling}_{resampling_status.capitalize()}")
 
         ax = sns.heatmap(cm, annot=True, fmt=".2f", cmap=cmap, xticklabels=cleaned_class_names, yticklabels=cleaned_class_names, annot_kws={"fontsize": 14})    
 
@@ -462,7 +552,7 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False):
         plt.yticks(rotation=45, va='top', fontsize=14)
         plt.xlabel('Predicted', fontsize=14, fontweight='bold')  
         plt.ylabel('Actual', fontsize=14, fontweight='bold') 
-        plt.title(title, fontsize=14, fontweight='bold')
+        plt.title(title, fontsize=14, fontweight='bold', loc='left', wrap=True)  
         plt.tight_layout()
 
         # Adding border around the color bar
@@ -505,29 +595,6 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 
-def compute_weights(labels, no_of_classes, beta=0.9999):
-    # Count each class's occurrence
-    samples_per_class = np.bincount(labels.cpu().numpy(), minlength=no_of_classes)
-
-    # Avoid division by zero
-    samples_per_class = np.where(samples_per_class == 0, 1, samples_per_class)
-    
-    # Compute weights using the class-balanced loss formula from the paper
-    effective_num = 1.0 - np.power(beta, samples_per_class)
-    weights = (1.0 - beta) / np.array(effective_num)
-
-    # Normalize the weights such that their sum equals the number of classes
-    weights = weights / np.sum(weights) * no_of_classes
-
-    # Convert the weights to a PyTorch tensor
-    weights = torch.tensor(weights, dtype=torch.float, device='cuda:0')
-
-    # Map weights to the corresponding labels
-    weight_per_label = weights[labels]
-
-    return weight_per_label
-
-
 
 
 def apply_data_augmentation(features, labels, augmentation_method):
@@ -562,15 +629,22 @@ def main():
         X_train, X_test, y_train, y_test = train_test_split(features_np, labels_np, test_size=0.3, random_state=42)
 
     elif args.dataset == 'windows_pe_real':
-        npz_file_path = 'data/Windows_PE/real_world/malware.npz'
-        with np.load(npz_file_path) as data:
+        # Load the noisy dataset for training
+        npz_noisy_file_path = 'data/Windows_PE/real_world/malware.npz'
+        with np.load(npz_noisy_file_path) as data:
             X_train, y_train = data['X_train'], data['y_train']
             X_test, y_test = data['X_test'], data['y_test']
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
 
+        # Load the clean dataset for final testing
+        npz_clean_file_path = 'data/Windows_PE/real_world/malware_true.npz'
+        with np.load(npz_clean_file_path) as data:
+            X_clean_test, y_clean_test = data['X_test'], data['y_test']
+        y_clean_test = label_encoder.transform(y_clean_test)
+
     elif args.dataset == 'BODMAS':
-        npz_file_path = 'data/Windows_PE/synthetic/malware.npz'
+        npz_file_path = 'data/Windows_PE/synthetic/malware_true.npz'
         with np.load(npz_file_path) as data:
             X_train, y_train = data['X_train'], data['y_train']
             X_test, y_test = data['X_test'], data['y_test']
@@ -591,8 +665,8 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     # Define the base filename with weight resampling status
-    resampling_status = 'weight_resampling' if args.use_weight_resampling else 'no_weight_resampling'
-    base_filename = f"{args.model_type}_{args.dataset}_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_noise{args.noise_rate}_imbalance{args.imbalance_ratio}_{resampling_status}"
+    resampling_status = 'weight_resampling' if args.weight_resampling else 'no_weight_resampling'
+    base_filename = f"{args.model_type}_{args.dataset}_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_{args.weight_resampling}_{resampling_status}"
 
     # File paths for CSV and model files
     validation_metrics_file = os.path.join(results_dir, f"{base_filename}_validation.csv")
@@ -659,7 +733,7 @@ def main():
         for epoch in range(args.n_epoch):
             no_of_classes = len(np.unique(y_train))  # Or directly set if known
 
-            train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_weight_resampling=args.use_weight_resampling)            
+            train(train_loader, model, optimizer, criterion, epoch, no_of_classes)            
             metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
 
             # Update metrics with Fold and Epoch at the beginning
@@ -672,7 +746,7 @@ def main():
     for i, result in enumerate(results, 1):
         print(f'Results Fold {i}:', result)
 
-    # Full dataset training and evaluation
+    # Full dataset training
     print("Training on the full dataset...")
     full_train_dataset = CICIDSDataset(features_np, labels_np, noise_or_not)
     full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
@@ -683,18 +757,41 @@ def main():
     full_criterion = CrossEntropyLoss()
 
     for epoch in range(args.n_epoch):
-        no_of_classes = len(np.unique(y_train))  # Or directly set if known
+        no_of_classes = len(np.unique(y_train))  # Directly set if known
+        train(train_loader, full_model, full_optimizer, full_criterion, epoch, no_of_classes)
 
-        train(train_loader, full_model, full_optimizer, full_criterion, epoch, no_of_classes, use_weight_resampling=args.use_weight_resampling)  
+    # Evaluate the full dataset and save predictions
+    if args.dataset == 'windows_pe_real':
+        print("Evaluating on clean dataset...")
+        clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
+        clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
+        predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
+    else:
+        full_metrics = evaluate(full_train_loader, full_model, label_encoder, args, save_conf_matrix=True)
+        predictions = evaluate(full_train_loader, full_model, label_encoder, args, return_predictions=True)
 
-    full_metrics = evaluate(full_train_loader, full_model, label_encoder, args, save_conf_matrix=True)
+    # Save predictions
+    predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
+    os.makedirs(predictions_dir, exist_ok=True)
+    predictions_filename = os.path.join(predictions_dir, f"{base_filename}_predictions.csv")
+    with open(predictions_filename, 'w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Predicted Label'])
+        for pred in predictions:
+            writer.writerow([pred])
 
-    with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=full_metrics.keys())
-        writer.writeheader()
-        writer.writerow(full_metrics)
+    print(f"Predictions saved to {predictions_filename}")
 
-    print("Final training and evaluation on the full dataset completed.")
+    # Record the evaluation results
+    row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', epoch)] + list(full_metrics.items()))
+    with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writerow(row_data)
+
+    print("Final evaluation completed.")
+
+
 
 if __name__ == '__main__':
     main()

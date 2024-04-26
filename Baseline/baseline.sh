@@ -4,8 +4,11 @@ for seed in 1 #2 3 4 5
 do
   for model_type in baseline
   do
-    CUDA_LAUNCH_BLOCKING=1 python baseline.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --use_weight_resampling --seed ${seed} --num_workers ${num_workers} --result_dir results/trial_${seed}/
-    CUDA_LAUNCH_BLOCKING=1 python baseline.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/trial_${seed}/
+    CUDA_LAUNCH_BLOCKING=1 python baseline.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0.3 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/trial_${seed}/
+    CUDA_LAUNCH_BLOCKING=1 python baseline.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0.3 --noise_type class --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/trial_${seed}/
+    CUDA_LAUNCH_BLOCKING=1 python baseline.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0.3 --noise_type feature --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/trial_${seed}/
+    CUDA_LAUNCH_BLOCKING=1 python baseline.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0.3 --noise_type MIMICRY --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/trial_${seed}/
+
 
     # CUDA_LAUNCH_BLOCKING=1 python baseline.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate 0.5 --noise_type feature --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/trial_${seed}/
     # CUDA_LAUNCH_BLOCKING=1 python baseline.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate 0.5 --noise_type feature --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/trial_${seed}/
