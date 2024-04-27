@@ -46,7 +46,7 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
 
 # GCE imports
-from TruncatedLoss import TruncatedLoss
+from GeneralizedCrossEntropyLoss import GeneralizedCrossEntropyLoss
 
 for dirname, _, filenames in os.walk('/data'):
     for filename in filenames:
@@ -394,7 +394,7 @@ def accuracy(logit, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
-def train(train_loader, model, optimizer, truncated_loss, epoch, no_of_classes):
+def train(train_loader, model, optimizer, gce_loss, epoch, no_of_classes):
     model.train()  # Set model to training mode
     train_total = 0
     train_correct = 0
@@ -404,7 +404,7 @@ def train(train_loader, model, optimizer, truncated_loss, epoch, no_of_classes):
         data, labels = data.cuda(), labels.cuda()
         logits = model(data)
 
-        loss = truncated_loss(logits, labels, indexes)
+        loss = gce_loss(logits, labels)
 
         # Apply weights manually if weight resampling is enabled
         if args.weight_resampling is not None:
@@ -753,11 +753,11 @@ def main():
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
         for epoch in range(args.n_epoch):
-            truncated_loss = TruncatedLoss(q=0.7, k=0.5, trainset_size=len(train_dataset)).cuda() 
+            gce_loss = GeneralizedCrossEntropyLoss(q=0.7).cuda() 
 
             no_of_classes = len(np.unique(y_train))  # Or directly set if known
 
-            train(train_loader, model, optimizer,truncated_loss, epoch, no_of_classes)     
+            train(train_loader, model, optimizer,gce_loss, epoch, no_of_classes)     
             metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
 
             # Update metrics with Fold and Epoch at the beginning
@@ -781,9 +781,9 @@ def main():
 
     for epoch in range(args.n_epoch):
 
-        truncated_loss = TruncatedLoss(q=0.7, k=0.5, trainset_size=len(full_train_dataset)).cuda() 
+        gce_loss = GeneralizedCrossEntropyLoss(q=0.7).cuda() 
         no_of_classes = len(np.unique(y_train))
-        train(train_loader, full_model, full_optimizer,truncated_loss, epoch, no_of_classes)
+        train(train_loader, full_model, full_optimizer,gce_loss, epoch, no_of_classes)
     # Evaluate the full dataset and save predictions
     if args.dataset == 'windows_pe_real':
         print("Evaluating on clean dataset...")
