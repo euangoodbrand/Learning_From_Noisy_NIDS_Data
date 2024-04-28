@@ -637,9 +637,11 @@ def apply_data_augmentation(features, labels, augmentation_method):
 
 
 def main():
+    print(model_str)
+    print(model_str)
+    print(model_str)
     label_encoder = LabelEncoder()
 
-    # Data loading and preprocessing
     if args.dataset == 'CIC_IDS_2017':
         preprocessed_file_path = 'data/final_dataframe.csv'
         if not os.path.exists(preprocessed_file_path):
@@ -652,20 +654,20 @@ def main():
         df = pd.read_csv(preprocessed_file_path)
         labels_np = label_encoder.fit_transform(df['Label'].values)
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
-        features_np = handle_inf_nan(features_np) 
-        X_train, X_test, y_train, y_test = train_test_split(features_np, labels_np, test_size=0.3, random_state=42)
+        features_np = handle_inf_nan(features_np)
+
+        # Splitting the data into training, test, and a clean test set
+        X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
+        X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
     elif args.dataset == 'windows_pe_real':
-        # Load the noisy dataset for training
         npz_noisy_file_path = 'data/Windows_PE/real_world/malware.npz'
+        npz_clean_file_path = 'data/Windows_PE/real_world/malware_true.npz'
         with np.load(npz_noisy_file_path) as data:
             X_train, y_train = data['X_train'], data['y_train']
             X_test, y_test = data['X_test'], data['y_test']
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
-
-        # Load the clean dataset for final testing
-        npz_clean_file_path = 'data/Windows_PE/real_world/malware_true.npz'
         with np.load(npz_clean_file_path) as data:
             X_clean_test, y_clean_test = data['X_test'], data['y_test']
         y_clean_test = label_encoder.transform(y_clean_test)
@@ -673,19 +675,13 @@ def main():
     elif args.dataset == 'BODMAS':
         npz_file_path = 'data/Windows_PE/synthetic/malware_true.npz'
         with np.load(npz_file_path) as data:
-            X_train, y_train = data['X_train'], data['y_train']
+            X_temp, y_temp = data['X_train'], data['y_train']
             X_test, y_test = data['X_test'], data['y_test']
-        y_train = label_encoder.fit_transform(y_train)
+        y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
-
-    # Apply imbalance to the dataset
-    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
-
-    # Introduce noise to the imbalanced data
-    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
-
-    # Apply data augmentation to the noisy data
-    features_np, labels_np = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
+        
+        # Splitting the data into training and a clean test set
+        X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
@@ -776,20 +772,32 @@ def main():
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
+    # Apply imbalance to the training dataset
+    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+
+    # Introduce noise to the imbalanced data
+    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+
+    # Apply data augmentation to the noisy data
+    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
+
+
 
     # Cross-validation training
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
     results = []
     fold = 0
-    for train_idx, val_idx in skf.split(features_np, labels_np):
+    for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
         fold += 1
-        X_train_fold, X_val_fold = features_np[train_idx], features_np[val_idx]
-        y_train_fold, y_val_fold = labels_np[train_idx], labels_np[val_idx]
+        X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
+        y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
         noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
 
         train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
-        val_dataset = CICIDSDataset(X_val_fold, y_val_fold, noise_or_not_val)
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+
+        # Use clean data for validation - separate clean validation data not affected by noise or augmentation
+        val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))  # Assuming this is your clean data reserved for validation
         val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
         model1 = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
@@ -798,7 +806,6 @@ def main():
         model2.apply(weights_init)
         optimizer1 = optim.Adam(model1.parameters(), lr=args.lr)
         optimizer2 = optim.Adam(model2.parameters(), lr=args.lr)
-        criterion = nn.CrossEntropyLoss()
 
         for epoch in range(args.n_epoch):
             no_of_classes = len(np.unique(y_train))  
@@ -823,35 +830,30 @@ def main():
 
     # Full dataset training
     print("Training on the full dataset...")
-    full_train_dataset = CICIDSDataset(features_np, labels_np, noise_or_not)
+    # Prepare the full augmented dataset for training
+    full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
     full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
-    full_model1 = MLPNet(num_features=features_np.shape[1], num_classes=len(np.unique(labels_np)), dataset=args.dataset).cuda()
+    full_model1 = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model1.apply(weights_init)
     full_optimizer1 = optim.Adam(full_model1.parameters(), lr=args.lr)
 
-    full_model2 = MLPNet(num_features=features_np.shape[1], num_classes=len(np.unique(labels_np)), dataset=args.dataset).cuda()
+    full_model2 = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model2.apply(weights_init)
     full_optimizer2 = optim.Adam(full_model2.parameters(), lr=args.lr)
-
-    full_criterion = nn.CrossEntropyLoss()
 
     for epoch in range(args.n_epoch):
         no_of_classes = len(np.unique(y_train)) 
         train(full_train_loader, full_model1, full_optimizer1, full_model2, full_optimizer2, epoch, args, no_of_classes, noise_or_not)
 
+    
+    # Prepare clean data for evaluation
+    clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
+    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-    # Evaluate the full dataset and save predictions for both models
-    if args.dataset == 'windows_pe_real':
-        print("Evaluating on clean dataset...")
-        clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
-        clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-        full_metrics1, full_metrics2 = evaluate(clean_test_loader, full_model1,full_model2, label_encoder, args, save_conf_matrix=True)
-        predictions1, predictions2 = evaluate(clean_test_loader, full_model1,full_model2, label_encoder, args, return_predictions=True)
-    else:
-        full_metrics1, full_metrics2 = evaluate(full_train_loader, full_model1,full_model2, label_encoder, args, save_conf_matrix=True)
-        predictions1, predictions2 = evaluate(full_train_loader, full_model1,full_model2, label_encoder, args, return_predictions=True)
+    full_metrics1, full_metrics2 = evaluate(clean_test_loader, full_model1,full_model2, label_encoder, args, save_conf_matrix=True)
+    predictions1, predictions2 = evaluate(clean_test_loader, full_model1,full_model2, label_encoder, args, return_predictions=True)
 
     # Save predictions
     predictions_dir = os.path.join(results_dir, args.dataset, 'predictions')
