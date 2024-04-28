@@ -169,34 +169,39 @@ noise_transition_matrix = np.array([
 
 
 def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
-    n_samples = len(labels)
-    n_noisy = int(n_samples * noise_rate)  # Calculate the number of samples to corrupt based on the noise rate
-    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)  # Randomly select indices to corrupt
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)  # Return the original labels with no noise
 
-    new_labels = labels.copy()  # Copy the original labels
-    noise_or_not = np.zeros(n_samples, dtype=bool)  # Initialize a mask to track noisy samples
+    n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
+
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
 
     for idx in noisy_indices:
         original_class = labels[idx]
-        # Choose a new label based on the probability distribution from the matrix for the original class
         new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
-        noise_or_not[idx] = new_labels[idx] != labels[idx]  # Update the noise tracking mask
+        noise_or_not[idx] = new_labels[idx] != labels[idx]
 
     return new_labels, noise_or_not
 
-def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
-    n_samples = len(labels)
-    n_noisy = int(n_samples * noise_rate)  # Calculate the number of samples to corrupt based on the noise rate
-    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)  # Randomly select indices to corrupt
 
-    new_labels = labels.copy()  # Copy the original labels
-    noise_or_not = np.zeros(n_samples, dtype=bool)  # Initialize a mask to track noisy samples
+def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
+
+    n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
+
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
 
     for idx in noisy_indices:
         original_class = labels[idx]
-        # Choose a new label based on the probability distribution from the matrix for the original class
         new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
-        noise_or_not[idx] = new_labels[idx] != labels[idx]  # Update the noise tracking mask
+        noise_or_not[idx] = new_labels[idx] != labels[idx]
 
     return new_labels, noise_or_not
 
@@ -208,60 +213,55 @@ def calculate_feature_thresholds(features):
 
 
 def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5):
-    # Initialize the nearest neighbors finder
-    knn = NearestNeighbors(n_neighbors=n_neighbors + 1)  # +1 because the point itself is included
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
+
+    knn = NearestNeighbors(n_neighbors=n_neighbors + 1)
     knn.fit(features)
-    
-    # Find the k-nearest neighbors (including the point itself)
     distances, indices = knn.kneighbors(features)
-    
-    # Determine the indices that should be noisy
+
     n_samples = len(labels)
     n_noisy = int(n_samples * noise_rate)
-    noisy_indices = np.random.choice(n_samples, n_noisy, replace=False)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
 
-    # Copy labels to prepare for noise introduction
     new_labels = labels.copy()
     noise_or_not = np.zeros(n_samples, dtype=bool)
 
     for i in noisy_indices:
-        # Get the indices of the neighbors excluding the point itself
-        neighbor_indices = indices[i][1:]  # skip the first index because it is the point itself
+        neighbor_indices = indices[i][1:]
         neighbor_classes = labels[neighbor_indices]
-        
-        # Identify neighbors with different class labels
         different_class_neighbors = neighbor_indices[neighbor_classes != labels[i]]
-        
+
         if len(different_class_neighbors) > 0:
-            # Randomly choose one of the different class neighbors
             chosen_neighbor = np.random.choice(different_class_neighbors)
             new_label = labels[chosen_neighbor]
             new_labels[i] = new_label
-            noise_or_not[i] = True if new_label != labels[i] else False
+            noise_or_not[i] = new_label != labels[i]
 
     return new_labels, noise_or_not
 
 
-def introduce_uniform_noise(labels, noise_rate=args.noise_rate):
+
+def introduce_uniform_noise(labels, noise_rate):
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
+
     n_samples = len(labels)
     n_noisy = int(noise_rate * n_samples)
     noisy_indices = np.random.choice(np.arange(n_samples), size=n_noisy, replace=False)
 
-    # Initialize as all False, indicating no sample is noisy initially
-    noise_or_not = np.zeros(n_samples, dtype=bool)  
-
-    # Iterate over the randomly selected indices to introduce noise
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
     unique_labels = np.unique(labels)
+
     for idx in noisy_indices:
         original_label = labels[idx]
-        # Exclude the original label to ensure the new label is indeed different
         possible_labels = np.delete(unique_labels, np.where(unique_labels == original_label))
-        # Randomly select a new label from the remaining possible labels
         new_label = np.random.choice(possible_labels)
-        labels[idx] = new_label  # Assign the new label
-        noise_or_not[idx] = True  # Mark this index as noisy
+        new_labels[idx] = new_label
+        noise_or_not[idx] = True
 
-    return labels, noise_or_not
+    return new_labels, noise_or_not
 
 
 def apply_imbalance(features, labels, ratio, downsample_half=True):
@@ -623,7 +623,6 @@ def apply_data_augmentation(features, labels, augmentation_method):
 def main():
     label_encoder = LabelEncoder()
 
-    # Data loading and preprocessing
     if args.dataset == 'CIC_IDS_2017':
         preprocessed_file_path = 'data/final_dataframe.csv'
         if not os.path.exists(preprocessed_file_path):
@@ -636,20 +635,20 @@ def main():
         df = pd.read_csv(preprocessed_file_path)
         labels_np = label_encoder.fit_transform(df['Label'].values)
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
-        features_np = handle_inf_nan(features_np) 
-        X_train, X_test, y_train, y_test = train_test_split(features_np, labels_np, test_size=0.3, random_state=42)
+        features_np = handle_inf_nan(features_np)
+
+        # Splitting the data into training, test, and a clean test set
+        X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
+        X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
     elif args.dataset == 'windows_pe_real':
-        # Load the noisy dataset for training
         npz_noisy_file_path = 'data/Windows_PE/real_world/malware.npz'
+        npz_clean_file_path = 'data/Windows_PE/real_world/malware_true.npz'
         with np.load(npz_noisy_file_path) as data:
             X_train, y_train = data['X_train'], data['y_train']
             X_test, y_test = data['X_test'], data['y_test']
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
-
-        # Load the clean dataset for final testing
-        npz_clean_file_path = 'data/Windows_PE/real_world/malware_true.npz'
         with np.load(npz_clean_file_path) as data:
             X_clean_test, y_clean_test = data['X_test'], data['y_test']
         y_clean_test = label_encoder.transform(y_clean_test)
@@ -657,19 +656,15 @@ def main():
     elif args.dataset == 'BODMAS':
         npz_file_path = 'data/Windows_PE/synthetic/malware_true.npz'
         with np.load(npz_file_path) as data:
-            X_train, y_train = data['X_train'], data['y_train']
+            X_temp, y_temp = data['X_train'], data['y_train']
             X_test, y_test = data['X_test'], data['y_test']
-        y_train = label_encoder.fit_transform(y_train)
+        y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
+        
+        # Splitting the data into training and a clean test set
+        X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
-    # Apply imbalance to the dataset
-    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
 
-    # Introduce noise to the imbalanced data
-    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
-
-    # Apply data augmentation to the noisy data
-    features_np, labels_np = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
 
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
@@ -723,19 +718,31 @@ def main():
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
+
+    # Apply imbalance to the training dataset
+    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+
+    # Introduce noise to the imbalanced data
+    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+
+    # Apply data augmentation to the noisy data
+    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
+
     # Cross-validation training
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
     results = []
     fold = 0
-    for train_idx, val_idx in skf.split(features_np, labels_np):
+    for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
         fold += 1
-        X_train_fold, X_val_fold = features_np[train_idx], features_np[val_idx]
-        y_train_fold, y_val_fold = labels_np[train_idx], labels_np[val_idx]
+        X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
+        y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
         noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
 
         train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
-        val_dataset = CICIDSDataset(X_val_fold, y_val_fold, noise_or_not_val)
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+
+        # Use clean data for validation - separate clean validation data not affected by noise or augmentation
+        val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))  # Assuming this is your clean data reserved for validation
         val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
         model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
@@ -743,11 +750,8 @@ def main():
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 
-
         for epoch in range(args.n_epoch):
-            no_of_classes = len(np.unique(y_train))  # Or directly set if known
-
-            train(train_loader, model, optimizer, criterion, epoch, no_of_classes)            
+            train(train_loader, model, optimizer, criterion, epoch, len(np.unique(y_train_fold)))
             metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
 
             # Update metrics with Fold and Epoch at the beginning
@@ -760,35 +764,37 @@ def main():
     for i, result in enumerate(results, 1):
         print(f'Results Fold {i}:', result)
 
+
     # Full dataset training
     print("Training on the full dataset...")
-    full_train_dataset = CICIDSDataset(features_np, labels_np, noise_or_not)
+    # Prepare the full augmented dataset for training
+    full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
     full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
-    full_model = MLPNet(num_features=features_np.shape[1], num_classes=len(np.unique(labels_np)), dataset=args.dataset).cuda()
+    # Prepare the full model
+    full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
     full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
     full_criterion = CrossEntropyLoss()
 
+    # Train on the full augmented dataset
+    print("Training on the full augmented dataset...")
     for epoch in range(args.n_epoch):
-        no_of_classes = len(np.unique(y_train))  # Directly set if known
-        train(train_loader, full_model, full_optimizer, full_criterion, epoch, no_of_classes)
+        train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
 
-    # Evaluate the full dataset and save predictions
-    if args.dataset == 'windows_pe_real':
-        print("Evaluating on clean dataset...")
-        clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
-        clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
-        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
-        predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
-    else:
-        full_metrics = evaluate(full_train_loader, full_model, label_encoder, args, save_conf_matrix=True)
-        predictions = evaluate(full_train_loader, full_model, label_encoder, args, return_predictions=True)
+    # Prepare clean data for evaluation
+    clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
+    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+
+    # Evaluate the full model on clean dataset and save predictions
+    print("Evaluating on clean dataset...")
+    full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
+    predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
 
     # Save predictions
     predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
     os.makedirs(predictions_dir, exist_ok=True)
-    predictions_filename = os.path.join(predictions_dir, f"{base_filename}_predictions.csv")
+    predictions_filename = os.path.join(predictions_dir, f"{args.dataset}_final_predictions.csv")
     with open(predictions_filename, 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(['Predicted Label'])
@@ -804,7 +810,6 @@ def main():
         writer.writerow(row_data)
 
     print("Final evaluation completed.")
-
 
 
 if __name__ == '__main__':
