@@ -55,14 +55,14 @@ pd.set_option('display.max_rows', None)
 nRowsRead = None 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--lr', type=float, default=0.001)
+parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
 parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
 parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=150)
+parser.add_argument('--n_epoch', type=int, default=10)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=1)
@@ -264,7 +264,7 @@ def introduce_uniform_noise(labels, noise_rate):
     return new_labels, noise_or_not
 
 
-def apply_imbalance(features, labels, ratio, downsample_half=True):
+def apply_imbalance(features, labels, ratio, min_samples_per_class=1, downsample_half=True):
     if ratio == 0:
         print("No imbalance applied as ratio is 0.")
         return features, labels
@@ -291,7 +291,7 @@ def apply_imbalance(features, labels, ratio, downsample_half=True):
             n_minority = np.min(counts)  # Use the smallest class count as the base for downsampling
             n_majority_new = int(n_minority * ratio)
             if len(class_indices) > n_majority_new:
-                keep_indices = np.random.choice(class_indices, n_majority_new, replace=False)
+                keep_indices = np.random.choice(class_indices, max(n_majority_new, min_samples_per_class), replace=False)
             else:
                 keep_indices = class_indices  # Keep all samples if class count is below the target
         else:
@@ -304,6 +304,7 @@ def apply_imbalance(features, labels, ratio, downsample_half=True):
     np.random.shuffle(indices_to_keep)  # Shuffle indices to mix classes
     
     return features[indices_to_keep], labels[indices_to_keep]
+
 
 
 
