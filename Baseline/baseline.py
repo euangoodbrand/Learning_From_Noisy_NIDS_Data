@@ -65,7 +65,7 @@ parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017
 parser.add_argument('--n_epoch', type=int, default=150)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
-parser.add_argument('--print_freq', type=int, default=1)
+parser.add_argument('--print_freq', type=int, default=10)
 parser.add_argument('--num_workers', type=int, default=1, help='how many subprocesses to use for data loading')
 parser.add_argument('--epoch_decay_start', type=int, default=80)
 parser.add_argument('--model_type', type=str, help='[coteaching, coteaching_plus]', default='baseline')
@@ -264,7 +264,7 @@ def introduce_uniform_noise(labels, noise_rate):
     return new_labels, noise_or_not
 
 
-def apply_imbalance(features, labels, ratio, min_samples_per_class=1, downsample_half=True):
+def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample_half=True):
     if ratio == 0:
         print("No imbalance applied as ratio is 0.")
         return features, labels
@@ -421,8 +421,11 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
         train_correct += (predicted == labels).sum().item()
         total_loss += loss.item()
 
-        if (i + 1) % args.print_freq == 0:
-            print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
+        # if (i + 1) % args.print_freq == 0:
+        #     print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
+        #           % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
+
+    print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
                   % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
 
     train_acc = 100. * train_correct / train_total
@@ -622,6 +625,9 @@ def apply_data_augmentation(features, labels, augmentation_method):
 
 
 def main():
+    print(model_str)
+    print(model_str)
+    print(model_str)
     label_encoder = LabelEncoder()
 
     if args.dataset == 'CIC_IDS_2017':

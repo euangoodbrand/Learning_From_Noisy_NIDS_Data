@@ -267,7 +267,7 @@ def introduce_uniform_noise(labels, noise_rate=args.noise_rate):
     return labels, noise_or_not
 
 
-def apply_imbalance(features, labels, ratio, min_samples_per_class=1, downsample_half=True):
+def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample_half=True):
     if ratio == 0:
         print("No imbalance applied as ratio is 0.")
         return features, labels
