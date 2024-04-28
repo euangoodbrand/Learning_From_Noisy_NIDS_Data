@@ -5,10 +5,10 @@ do
   for model_type in coteaching_plus
   do
 
-    CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
-    CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation none --noise_rate 0.1 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
-    CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation none --noise_rate 0.3 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
-    CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation none --noise_rate 0.6 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
+    # CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
+    # CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation none --noise_rate 0.1 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
+    # CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation none --noise_rate 0.3 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
+    # CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation none --noise_rate 0.6 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
 
 
     CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_2$

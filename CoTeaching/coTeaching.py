@@ -473,7 +473,7 @@ def calculate_metrics(all_labels, all_preds, label_encoder, args):
 
 
 
-def create_confusion_matrix(all_labels, all_preds, label_encoder, args, model_str):
+def create_confusion_matrix(all_labels, all_preds, label_encoder, args):
     # Define the colormap for the heatmap
     colors = ["#FFFFFF", "#B9F5F1", "#C8A8E2"]
     cmap = LinearSegmentedColormap.from_list("custom_cmap", colors, N=256)
@@ -584,11 +584,16 @@ def evaluate(test_loader, model1, model2, label_encoder, args, save_conf_matrix=
     class_accuracies1 = calculate_class_accuracies(all_labels, all_preds1, label_encoder, args)
     class_accuracies2 = calculate_class_accuracies(all_labels, all_preds2, label_encoder, args)
 
+    metrics1.update(class_accuracies1)
+    metrics2.update(class_accuracies2)
+
+    print("Metrics 1",metrics1)
+    print("Metrics 2",metrics2)
+
     # Generate and save confusion matrices for both models if requested
     if save_conf_matrix:
-        create_confusion_matrix(all_labels, all_preds1, label_encoder, args, "Model 1")
-        create_confusion_matrix(all_labels, all_preds2, label_encoder, args, "Model 2")
-
+        create_confusion_matrix(all_labels, all_preds1, label_encoder, args)
+        create_confusion_matrix(all_labels, all_preds2, label_encoder, args)
 
     return metrics1, metrics2
 
@@ -845,7 +850,7 @@ def main():
         full_metrics1, full_metrics2 = evaluate(clean_test_loader, full_model1,full_model2, label_encoder, args, save_conf_matrix=True)
         predictions1, predictions2 = evaluate(clean_test_loader, full_model1,full_model2, label_encoder, args, return_predictions=True)
     else:
-        full_metrics1 = evaluate(full_train_loader, full_model1,full_model2, label_encoder, args, save_conf_matrix=True)
+        full_metrics1, full_metrics2 = evaluate(full_train_loader, full_model1,full_model2, label_encoder, args, save_conf_matrix=True)
         predictions1, predictions2 = evaluate(full_train_loader, full_model1,full_model2, label_encoder, args, return_predictions=True)
 
     # Save predictions
@@ -859,6 +864,7 @@ def main():
     save_predictions(predictions1, predictions_filename1)
     save_predictions(predictions2, predictions_filename2)
 
+    print(full_metrics1)
     # Record the evaluation results for both models without the fold number
     record_evaluation_results(full_metrics1, full_dataset_metrics_file_model1, epoch, fieldnames)
     record_evaluation_results(full_metrics2, full_dataset_metrics_file_model2, epoch, fieldnames)
@@ -874,10 +880,13 @@ def save_predictions(predictions, filename):
             writer.writerow([pred])
 
 def record_evaluation_results(metrics, filename, epoch, fieldnames):
+    if not isinstance(metrics, dict):
+        raise ValueError("Metrics should be a dictionary.")
     row_data = OrderedDict([('Epoch', epoch)] + list(metrics.items()))
     with open(filename, "a", newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerow(row_data)
+
 
 if __name__ == '__main__':
     main()
