@@ -764,7 +764,6 @@ def main():
     for i, result in enumerate(results, 1):
         print(f'Results Fold {i}:', result)
 
-
     # Full dataset training
     print("Training on the full dataset...")
     # Prepare the full augmented dataset for training
@@ -781,6 +780,9 @@ def main():
     print("Training on the full augmented dataset...")
     for epoch in range(args.n_epoch):
         train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
+
+
+
 
     # Prepare clean data for evaluation
     clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
