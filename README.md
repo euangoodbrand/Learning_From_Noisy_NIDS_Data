@@ -45,7 +45,7 @@ python main.py --dataset cicids --model_type coteaching_plus --noise_type symmet
 
 ## Citation
 
-If you find this implementation helpful for your research, please consider citing the original paper:
+If you find this implementation helpful for your research, please consider citing the original papers:
 
 ```bash
 @INPROCEEDINGS{10179453,
@@ -58,6 +58,143 @@ If you find this implementation helpful for your research, please consider citin
   pages={2602-2619},
   keywords={Training;Text mining;Privacy;Supervised learning;Training data;Semisupervised learning;Malware},
   doi={10.1109/SP46215.2023.10179453}}
+
+
+% Co-Teaching
+
+% link https://arxiv.org/abs/1804.06872
+
+@misc{han2018coteaching,
+      title={Co-teaching: Robust Training of Deep Neural Networks with Extremely Noisy Labels}, 
+      author={Bo Han and Quanming Yao and Xingrui Yu and Gang Niu and Miao Xu and Weihua Hu and Ivor Tsang and Masashi Sugiyama},
+      year={2018},
+      eprint={1804.06872},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+% Co-Teaching + 
+
+% link: https://arxiv.org/abs/1901.04215
+
+@misc{yu2019does,
+      title={How does Disagreement Help Generalization against Label Corruption?}, 
+      author={Xingrui Yu and Bo Han and Jiangchao Yao and Gang Niu and Ivor W. Tsang and Masashi Sugiyama},
+      year={2019},
+      eprint={1901.04215},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+
+
+%Mentor Mix
+
+% link : https://arxiv.org/pdf/1911.09781.pdfhttps://proceedings.mlr.press/v119/jiang20c/jiang20c.pdf
+
+@inproceedings{jiang2020beyond,
+  title={Beyond synthetic noise: Deep learning on controlled noisy labels},
+  author={Jiang, L. and Huang, D. and Liu, M. and Yang, W.},
+  booktitle={International Conference on Machine Learning (ICML)},
+  year={2020}
+}
+
+% Bootstrap
+
+% link: https://arxiv.org/abs/1412.6596
+@misc{reed2015training,
+      title={Training Deep Neural Networks on Noisy Labels with Bootstrapping}, 
+      author={Scott Reed and Honglak Lee and Dragomir Anguelov and Christian Szegedy and Dumitru Erhan and Andrew Rabinovich},
+      year={2015},
+      eprint={1412.6596},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+
+
+% LRT
+
+%Link : https://arxiv.org/pdf/2011.10077.pdf
+
+
+@InProceedings{zheng2020error,
+  title = 	 {Error-Bounded Correction of Noisy Labels},
+  author =       {Zheng, Songzhu and Wu, Pengxiang and Goswami, Aman and Goswami, Mayank and Metaxas, Dimitris and Chen, Chao},
+  booktitle = 	 {Proceedings of the 37th International Conference on Machine Learning},
+  pages = 	 {11447--11457},
+  year = 	 {2020},
+  editor = 	 {III, Hal Daumé and Singh, Aarti},
+  volume = 	 {119},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {13--18 Jul},
+  publisher =    {PMLR},
+  pdf = 	 {http://proceedings.mlr.press/v119/zheng20c/zheng20c.pdf},
+  url = 	 {https://proceedings.mlr.press/v119/zheng20c.html}
+}
+
+
+
+% GCE
+
+% link: https://arxiv.org/abs/1805.07836
+
+@misc{zhang2018generalized,
+      title={Generalized Cross Entropy Loss for Training Deep Neural Networks with Noisy Labels}, 
+      author={Zhilu Zhang and Mert R. Sabuncu},
+      year={2018},
+      eprint={1805.07836},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+
+
+% ELR
+
+% Link: https://arxiv.org/abs/2007.00151
+
+@misc{liu2020earlylearning,
+   title={Early-Learning Regularization Prevents Memorization of Noisy Labels}, 
+      author={Sheng Liu and Jonathan Niles-Weed and Narges Razavian and Carlos Fernandez-Granda},
+      year={2020},
+      eprint={2007.00151},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+
+% Noise Adaption
+
+%Linke: https://openreview.net/forum?id=H12GRgcxg
+
+
+@inproceedings{
+goldberger2017training,
+title={Training deep neural-networks using a noise adaptation layer},
+author={Jacob Goldberger and Ehud Ben-Reuven},
+booktitle={International Conference on Learning Representations},
+year={2017},
+url={https://openreview.net/forum?id=H12GRgcxg}
+}
+
+
+%LIO 
+
+% Link: https://proceedings.mlr.press/v139/zhang21n.html
+
+
+@InProceedings{pmlr-v139-zhang21n,
+  title = 	 {Learning Noise Transition Matrix from Only Noisy Labels via Total Variation Regularization},
+  author =       {Zhang, Yivan and Niu, Gang and Sugiyama, Masashi},
+  booktitle = 	 {Proceedings of the 38th International Conference on Machine Learning},
+  pages = 	 {12501--12512},
+  year = 	 {2021},
+  editor = 	 {Meila, Marina and Zhang, Tong},
+  volume = 	 {139},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {18--24 Jul},
+  publisher =    {PMLR},
+  pdf = 	 {http://proceedings.mlr.press/v139/zhang21n/zhang21n.pdf},
+  url = 	 {https://proceedings.mlr.press/v139/zhang21n.html}
+}
+
+
 
 ```
 
