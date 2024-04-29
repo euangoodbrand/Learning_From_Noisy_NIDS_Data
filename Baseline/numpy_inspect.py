@@ -10,7 +10,16 @@ def inspect_and_compare(npz_file_path1, npz_file_path2):
         for key in data2.files:
             print(f"Key: {key}, Shape of array: {data2[key].shape}")
 
-        # Compare labels
+        # Compare X_train and X_test
+        X_train1 = data1['X_train']
+        X_train2 = data2['X_train']
+        X_test1 = data1['X_test']
+        X_test2 = data2['X_test']
+
+        print("Sample data comparison, X_train1 vs X_train2 first 10 samples:", np.array_equal(X_train1[:10], X_train2[:10]))
+        print("Sample data comparison, X_test1 vs X_test2 first 10 samples:", np.array_equal(X_test1[:10], X_test2[:10]))
+
+        # Compare y_train and y_test
         y_train1 = data1['y_train']
         y_train2 = data2['y_train']
         y_test1 = data1['y_test']
@@ -27,13 +36,14 @@ def inspect_and_compare(npz_file_path1, npz_file_path2):
         print("Unique labels and counts in y_test1:", dict(zip(unique_test_labels1, test_counts1)))
         print("Unique labels and counts in y_test2:", dict(zip(unique_test_labels2, test_counts2)))
 
-        print("Sample data comparison, y_train1 vs y_train2:", np.array_equal(y_train1[:10], y_train2[:10]))
-        print("Sample data comparison, y_test1 vs y_test2:", np.array_equal(y_test1[:10], y_test2[:10]))
+        print("Sample data comparison, y_train1 vs y_train2 first 10 labels:", np.array_equal(y_train1[:10], y_train2[:10]))
+        print("Sample data comparison, y_test1 vs y_test2 first 10 labels:", np.array_equal(y_test1[:10], y_test2[:10]))
 
         print("Mean and std of y_train1:", np.mean(y_train1), np.std(y_train1))
         print("Mean and std of y_train2:", np.mean(y_train2), np.std(y_train2))
 
-# Usage
+
+# Usage eXample
 file1 = 'data/Windows_PE/real_world/malware.npz'
 file2 = 'data/Windows_PE/real_world/malware_true.npz'
 inspect_and_compare(file1, file2)
