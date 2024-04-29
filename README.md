@@ -58,12 +58,13 @@ If you find this implementation helpful for your research, please consider citin
   pages={2602-2619},
   keywords={Training;Text mining;Privacy;Supervised learning;Training data;Semisupervised learning;Malware},
   doi={10.1109/SP46215.2023.10179453}}
+```
 
 
 % Co-Teaching
 
 % link https://arxiv.org/abs/1804.06872
-
+```bash
 @misc{han2018coteaching,
       title={Co-teaching: Robust Training of Deep Neural Networks with Extremely Noisy Labels}, 
       author={Bo Han and Quanming Yao and Xingrui Yu and Gang Niu and Miao Xu and Weihua Hu and Ivor Tsang and Masashi Sugiyama},
@@ -72,9 +73,12 @@ If you find this implementation helpful for your research, please consider citin
       archivePrefix={arXiv},
       primaryClass={cs.LG}
 }
+```
+
 % Co-Teaching + 
 
 % link: https://arxiv.org/abs/1901.04215
+```bash
 
 @misc{yu2019does,
       title={How does Disagreement Help Generalization against Label Corruption?}, 
@@ -84,11 +88,13 @@ If you find this implementation helpful for your research, please consider citin
       archivePrefix={arXiv},
       primaryClass={cs.LG}
 }
+```
 
 
 %Mentor Mix
 
 % link : https://arxiv.org/pdf/1911.09781.pdfhttps://proceedings.mlr.press/v119/jiang20c/jiang20c.pdf
+```bash
 
 @inproceedings{jiang2020beyond,
   title={Beyond synthetic noise: Deep learning on controlled noisy labels},
@@ -96,10 +102,13 @@ If you find this implementation helpful for your research, please consider citin
   booktitle={International Conference on Machine Learning (ICML)},
   year={2020}
 }
+```
 
 % Bootstrap
 
 % link: https://arxiv.org/abs/1412.6596
+```
+
 @misc{reed2015training,
       title={Training Deep Neural Networks on Noisy Labels with Bootstrapping}, 
       author={Scott Reed and Honglak Lee and Dragomir Anguelov and Christian Szegedy and Dumitru Erhan and Andrew Rabinovich},
@@ -109,11 +118,13 @@ If you find this implementation helpful for your research, please consider citin
       primaryClass={cs.CV}
 }
 
+```
 
 % LRT
 
 %Link : https://arxiv.org/pdf/2011.10077.pdf
 
+```bash
 
 @InProceedings{zheng2020error,
   title = 	 {Error-Bounded Correction of Noisy Labels},
@@ -130,11 +141,13 @@ If you find this implementation helpful for your research, please consider citin
   url = 	 {https://proceedings.mlr.press/v119/zheng20c.html}
 }
 
+```
 
 
 % GCE
 
 % link: https://arxiv.org/abs/1805.07836
+```bash
 
 @misc{zhang2018generalized,
       title={Generalized Cross Entropy Loss for Training Deep Neural Networks with Noisy Labels}, 
@@ -145,10 +158,12 @@ If you find this implementation helpful for your research, please consider citin
       primaryClass={cs.LG}
 }
 
+```
 
 % ELR
 
 % Link: https://arxiv.org/abs/2007.00151
+```bash
 
 @misc{liu2020earlylearning,
    title={Early-Learning Regularization Prevents Memorization of Noisy Labels}, 
@@ -158,12 +173,14 @@ If you find this implementation helpful for your research, please consider citin
       archivePrefix={arXiv},
       primaryClass={cs.LG}
 }
+```
+
 
 % Noise Adaption
 
 %Linke: https://openreview.net/forum?id=H12GRgcxg
 
-
+```bash
 @inproceedings{
 goldberger2017training,
 title={Training deep neural-networks using a noise adaptation layer},
@@ -172,13 +189,14 @@ booktitle={International Conference on Learning Representations},
 year={2017},
 url={https://openreview.net/forum?id=H12GRgcxg}
 }
+```
 
 
 %LIO 
 
 % Link: https://proceedings.mlr.press/v139/zhang21n.html
 
-
+```bash
 @InProceedings{pmlr-v139-zhang21n,
   title = 	 {Learning Noise Transition Matrix from Only Noisy Labels via Total Variation Regularization},
   author =       {Zhang, Yivan and Niu, Gang and Sugiyama, Masashi},
@@ -193,7 +211,6 @@ url={https://openreview.net/forum?id=H12GRgcxg}
   pdf = 	 {http://proceedings.mlr.press/v139/zhang21n/zhang21n.pdf},
   url = 	 {https://proceedings.mlr.press/v139/zhang21n.html}
 }
-
 
 
 ```
