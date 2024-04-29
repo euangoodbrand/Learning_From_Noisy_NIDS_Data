@@ -29,7 +29,9 @@ from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 )
 
+# sklearn imports
 from sklearn.neighbors import NearestNeighbors
+from sklearn.exceptions import NotFittedError
 
 # Imblearn Imports
 from imblearn.over_sampling import SMOTE
@@ -155,6 +157,7 @@ def introduce_noise(labels, features, noise_type, noise_rate):
         raise ValueError("Invalid noise type specified.")
 
 
+
 # Class dependant noise matrix, from previous evaluation run.
 predefined_matrix = np.array([
     [0.8, 0.03, 0.01, 0.01, 0.06, 0.0, 0.0, 0.0, 0.07, 0.0, 0.02, 0.0],
@@ -188,36 +191,40 @@ noise_transition_matrix = np.array([
 ])
 
 
-
 def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
-    n_samples = len(labels)
-    n_noisy = int(n_samples * noise_rate)  # Calculate the number of samples to corrupt based on the noise rate
-    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)  # Randomly select indices to corrupt
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)  # Return the original labels with no noise
 
-    new_labels = labels.copy()  # Copy the original labels
-    noise_or_not = np.zeros(n_samples, dtype=bool)  # Initialize a mask to track noisy samples
+    n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
+
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
 
     for idx in noisy_indices:
         original_class = labels[idx]
-        # Choose a new label based on the probability distribution from the matrix for the original class
         new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
-        noise_or_not[idx] = new_labels[idx] != labels[idx]  # Update the noise tracking mask
+        noise_or_not[idx] = new_labels[idx] != labels[idx]
 
     return new_labels, noise_or_not
 
-def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
-    n_samples = len(labels)
-    n_noisy = int(n_samples * noise_rate)  # Calculate the number of samples to corrupt based on the noise rate
-    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)  # Randomly select indices to corrupt
 
-    new_labels = labels.copy()  # Copy the original labels
-    noise_or_not = np.zeros(n_samples, dtype=bool)  # Initialize a mask to track noisy samples
+def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
+
+    n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
+
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
 
     for idx in noisy_indices:
         original_class = labels[idx]
-        # Choose a new label based on the probability distribution from the matrix for the original class
         new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
-        noise_or_not[idx] = new_labels[idx] != labels[idx]  # Update the noise tracking mask
+        noise_or_not[idx] = new_labels[idx] != labels[idx]
 
     return new_labels, noise_or_not
 
@@ -229,60 +236,55 @@ def calculate_feature_thresholds(features):
 
 
 def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5):
-    # Initialize the nearest neighbors finder
-    knn = NearestNeighbors(n_neighbors=n_neighbors + 1)  # +1 because the point itself is included
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
+
+    knn = NearestNeighbors(n_neighbors=n_neighbors + 1)
     knn.fit(features)
-    
-    # Find the k-nearest neighbors (including the point itself)
     distances, indices = knn.kneighbors(features)
-    
-    # Determine the indices that should be noisy
+
     n_samples = len(labels)
     n_noisy = int(n_samples * noise_rate)
-    noisy_indices = np.random.choice(n_samples, n_noisy, replace=False)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
 
-    # Copy labels to prepare for noise introduction
     new_labels = labels.copy()
     noise_or_not = np.zeros(n_samples, dtype=bool)
 
     for i in noisy_indices:
-        # Get the indices of the neighbors excluding the point itself
-        neighbor_indices = indices[i][1:]  # skip the first index because it is the point itself
+        neighbor_indices = indices[i][1:]
         neighbor_classes = labels[neighbor_indices]
-        
-        # Identify neighbors with different class labels
         different_class_neighbors = neighbor_indices[neighbor_classes != labels[i]]
-        
+
         if len(different_class_neighbors) > 0:
-            # Randomly choose one of the different class neighbors
             chosen_neighbor = np.random.choice(different_class_neighbors)
             new_label = labels[chosen_neighbor]
             new_labels[i] = new_label
-            noise_or_not[i] = True if new_label != labels[i] else False
+            noise_or_not[i] = new_label != labels[i]
 
     return new_labels, noise_or_not
 
 
-def introduce_uniform_noise(labels, noise_rate=args.noise_rate):
+
+def introduce_uniform_noise(labels, noise_rate):
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
+
     n_samples = len(labels)
     n_noisy = int(noise_rate * n_samples)
     noisy_indices = np.random.choice(np.arange(n_samples), size=n_noisy, replace=False)
 
-    # Initialize as all False, indicating no sample is noisy initially
-    noise_or_not = np.zeros(n_samples, dtype=bool)  
-
-    # Iterate over the randomly selected indices to introduce noise
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
     unique_labels = np.unique(labels)
+
     for idx in noisy_indices:
         original_label = labels[idx]
-        # Exclude the original label to ensure the new label is indeed different
         possible_labels = np.delete(unique_labels, np.where(unique_labels == original_label))
-        # Randomly select a new label from the remaining possible labels
         new_label = np.random.choice(possible_labels)
-        labels[idx] = new_label  # Assign the new label
-        noise_or_not[idx] = True  # Mark this index as noisy
+        new_labels[idx] = new_label
+        noise_or_not[idx] = True
 
-    return labels, noise_or_not
+    return new_labels, noise_or_not
 
 
 def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample_half=True):
@@ -298,33 +300,75 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
     n_classes = len(unique)
     
     # Determine which classes to downsample
-    # Example: Downsample the first half of the sorted unique classes
     if downsample_half:
-        downsample_classes = unique[:n_classes // 2]
+        downsample_classes = unique[n_classes // 2:]
+        keep_classes = unique[:n_classes // 2]
     else:
         downsample_classes = unique
+        keep_classes = []
 
+    # Calculate the average count of the classes not being downsampled
+    keep_indices = []
+    keep_class_counts = [count for cls, count in zip(unique, counts) if cls in keep_classes]
+    if keep_class_counts:
+        average_keep_class_count = int(np.mean(keep_class_counts))
+    else:
+        average_keep_class_count = min(counts)  # Fallback if no classes are kept
+    
     indices_to_keep = []
     for cls in unique:
         class_indices = np.where(labels == cls)[0]
         if cls in downsample_classes:
-            # Downsample these classes
-            n_minority = np.min(counts)  # Use the smallest class count as the base for downsampling
-            n_majority_new = int(n_minority * ratio)
+            # Calculate the target count for downsampled classes
+            n_majority_new = max(int(average_keep_class_count * ratio), min_samples_per_class)
             if len(class_indices) > n_majority_new:
-                keep_indices = np.random.choice(class_indices, max(n_majority_new, min_samples_per_class), replace=False)
+                keep_indices = np.random.choice(class_indices, n_majority_new, replace=False)
             else:
                 keep_indices = class_indices  # Keep all samples if class count is below the target
         else:
             # Keep all samples from the classes not being downsampled
             keep_indices = class_indices
-        
+
         indices_to_keep.extend(keep_indices)
 
     indices_to_keep = np.array(indices_to_keep)
     np.random.shuffle(indices_to_keep)  # Shuffle indices to mix classes
     
     return features[indices_to_keep], labels[indices_to_keep]
+
+def apply_data_augmentation(features, labels, augmentation_method):
+    try:
+        unique, counts = np.unique(labels, return_counts=True)
+        print(f"Class distribution before augmentation: {dict(zip(unique, counts))}")
+
+        if augmentation_method == 'smote':
+            # Adjust n_neighbors based on the smallest class count minus one (since it cannot be more than the number of samples in the smallest class)
+            min_samples = np.min(counts)
+            n_neighbors = min(5, min_samples - 1) if min_samples > 1 else 1
+            smote = SMOTE(random_state=42, k_neighbors=n_neighbors)
+            features, labels = smote.fit_resample(features, labels)
+        elif augmentation_method == 'undersampling':
+            rus = RandomUnderSampler(random_state=42)
+            features, labels = rus.fit_resample(features, labels)
+        elif augmentation_method == 'oversampling':
+            ros = RandomOverSampler(random_state=42)
+            features, labels = ros.fit_resample(features, labels)
+        elif augmentation_method == 'adasyn':
+            min_samples = np.min(counts)
+            n_neighbors = min(5, min_samples - 1) if min_samples > 1 else 1
+            adasyn = ADASYN(random_state=42, n_neighbors=n_neighbors)
+            features, labels = adasyn.fit_resample(features, labels)
+
+        unique, counts = np.unique(labels, return_counts=True)
+        print(f"Class distribution after augmentation: {dict(zip(unique, counts))}")
+
+        return features, labels
+    except ValueError as e:
+        print(f"Error during {augmentation_method}: {e}")
+        return features, labels
+    except NotFittedError as e:
+        print(f"Model fitting error with {augmentation_method}: {e}")
+        return features, labels
 
 
 
@@ -357,6 +401,7 @@ def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0):
     weight_per_label = weights[labels]
 
     return weight_per_label
+
 
 
 
@@ -628,17 +673,6 @@ def handle_inf_nan(features_np):
 
 
 
-def apply_data_augmentation(features, labels, augmentation_method):
-    if augmentation_method == 'smote':
-        return SMOTE(random_state=42).fit_resample(features, labels)
-    elif augmentation_method == 'undersampling':
-        return RandomUnderSampler(random_state=42).fit_resample(features, labels)
-    elif augmentation_method == 'oversampling':
-        return RandomOverSampler(random_state=42).fit_resample(features, labels)
-    elif augmentation_method == 'adasyn':
-        return ADASYN(random_state=42).fit_resample(features, labels)
-    return features, labels
-
 
 def main():
     label_encoder = LabelEncoder()
@@ -739,16 +773,45 @@ def main():
         writer.writeheader()
 
 
+    # Print the original dataset sizes and class distribution
+    print("Original dataset:")
+    print(f"Length of X_train: {len(X_train)}")
+    print(f"Length of y_train: {len(y_train)}")
+    print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
+
     # Apply imbalance to the training dataset
     X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+
+    # Print class distribution after applying imbalance
+    print("Before introducing noise:")
+    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+    print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
+    print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
 
     # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
+    # Print class distribution after introducing noise
+    print("Before augmentation:")
+    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+    print(f"Length of y_train_noisy: {len(y_train_noisy)}")
+    print(f"Length of noise_or_not: {len(noise_or_not)}")
+    print("Class distribution after introducing noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
+
     # Apply data augmentation to the noisy data
     X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
- 
 
+    if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
+        # Recalculate noise_or_not to match the augmented data size
+        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
+
+    # Print class distribution after data augmentation
+    print("After augmentation:")
+    print(f"Length of X_train_augmented: {len(X_train_augmented)}")
+    print(f"Length of y_train_augmented: {len(y_train_augmented)}")
+    print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
+    print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
+    
     # Cross-validation training
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
     results = []
