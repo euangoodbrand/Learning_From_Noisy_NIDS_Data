@@ -61,9 +61,9 @@ If you find this implementation helpful for your research, please consider citin
 ```
 
 
-% Co-Teaching
+### Co-Teaching
 
-% link https://arxiv.org/abs/1804.06872
+#### link https://arxiv.org/abs/1804.06872
 ```bash
 @misc{han2018coteaching,
       title={Co-teaching: Robust Training of Deep Neural Networks with Extremely Noisy Labels}, 
@@ -75,9 +75,9 @@ If you find this implementation helpful for your research, please consider citin
 }
 ```
 
-% Co-Teaching + 
+### Co-Teaching + 
 
-% link: https://arxiv.org/abs/1901.04215
+#### link: https://arxiv.org/abs/1901.04215
 ```bash
 
 @misc{yu2019does,
@@ -91,9 +91,9 @@ If you find this implementation helpful for your research, please consider citin
 ```
 
 
-%Mentor Mix
+### Mentor Mix
 
-% link : https://arxiv.org/pdf/1911.09781.pdfhttps://proceedings.mlr.press/v119/jiang20c/jiang20c.pdf
+#### link : https://arxiv.org/pdf/1911.09781.pdfhttps://proceedings.mlr.press/v119/jiang20c/jiang20c.pdf
 ```bash
 
 @inproceedings{jiang2020beyond,
@@ -104,9 +104,9 @@ If you find this implementation helpful for your research, please consider citin
 }
 ```
 
-% Bootstrap
+### Bootstrap
 
-% link: https://arxiv.org/abs/1412.6596
+#### link: https://arxiv.org/abs/1412.6596
 ```
 
 @misc{reed2015training,
@@ -120,9 +120,9 @@ If you find this implementation helpful for your research, please consider citin
 
 ```
 
-% LRT
+### LRT
 
-%Link : https://arxiv.org/pdf/2011.10077.pdf
+#### Link : https://arxiv.org/pdf/2011.10077.pdf
 
 ```bash
 
@@ -144,9 +144,10 @@ If you find this implementation helpful for your research, please consider citin
 ```
 
 
-% GCE
+### GCE
 
-% link: https://arxiv.org/abs/1805.07836
+#### link: https://arxiv.org/abs/1805.07836
+
 ```bash
 
 @misc{zhang2018generalized,
@@ -160,9 +161,10 @@ If you find this implementation helpful for your research, please consider citin
 
 ```
 
-% ELR
+### ELR
 
-% Link: https://arxiv.org/abs/2007.00151
+#### Link: https://arxiv.org/abs/2007.00151
+
 ```bash
 
 @misc{liu2020earlylearning,
@@ -176,9 +178,9 @@ If you find this implementation helpful for your research, please consider citin
 ```
 
 
-% Noise Adaption
+### Noise Adaption
 
-%Linke: https://openreview.net/forum?id=H12GRgcxg
+#### Link: https://openreview.net/forum?id=H12GRgcxg
 
 ```bash
 @inproceedings{
@@ -192,9 +194,9 @@ url={https://openreview.net/forum?id=H12GRgcxg}
 ```
 
 
-%LIO 
+### LIO 
 
-% Link: https://proceedings.mlr.press/v139/zhang21n.html
+#### Link: https://proceedings.mlr.press/v139/zhang21n.html
 
 ```bash
 @InProceedings{pmlr-v139-zhang21n,
