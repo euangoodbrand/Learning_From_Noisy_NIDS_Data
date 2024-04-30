@@ -902,8 +902,9 @@ def main():
         print(f'Results Fold {i}:', result)
 
 
-    # Full dataset training
-    print("Training on the full dataset...")
+
+    # Full dataset training with LRT
+    print("Training on the full dataset with LRT...")
     # Prepare the full augmented dataset for training
     full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
     full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
@@ -914,19 +915,21 @@ def main():
     full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
     full_criterion = CrossEntropyLoss()
 
+    # Initialize place for storing prediction softmaxes for LRT
+    pred_softlabels = np.zeros([len(full_train_loader.dataset), args.every_n_epoch, num_class], dtype=np.float64)
+
     # Train on the full augmented dataset
-    print("Training on the full augmented dataset...")
     for epoch in range(args.n_epoch):
-        train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
+        indices_updated = range(len(y_train_augmented))  # All indices are potentially updated in full training
+        train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, pred_softlabels, indices_updated, args)
 
-
-
+    print("Training with LRT completed.")
 
     # Prepare clean data for evaluation
     clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
     clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-    # Evaluate the full model on clean dataset and save predictions
+    # Evaluate the full model on the clean dataset
     print("Evaluating on clean dataset...")
     full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
     predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
