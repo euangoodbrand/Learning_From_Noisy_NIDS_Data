@@ -899,15 +899,17 @@ def main():
     full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
 
+    # Prepare clean data for evaluation
+    clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
+    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+
     # Baseline Model Training
     full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
     optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
     criterion = CrossEntropyLoss()
 
-
-    # Train baseline and calculate confusion matrix
-    train_and_evaluate(full_model, full_train_loader, full_train_loader, optimizer, criterion, args.n_epoch)  # Using same loader for simplicity
+    train_and_evaluate(full_train_loader, clean_test_loader, full_model, criterion, optimizer, args.n_epoch)
     conf_matrix = calculate_confusion_matrix(full_model, full_train_loader, len(np.unique(y_train_augmented)))
 
 
