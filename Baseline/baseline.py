@@ -74,7 +74,7 @@ parser.add_argument('--model_type', type=str, help='[coteaching, coteaching_plus
 parser.add_argument('--fr_type', type=str, help='forget rate type', default='type_1')
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default=None, help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
-parser.add_argument('--weight_resampling', type=str, choices=['Naive', 'Focal', 'Class-Balance'], default=None, help='Select the weight resampling method if needed')
+parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
 
 args = parser.parse_args()
 
@@ -356,30 +356,24 @@ def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0):
     samples_per_class = np.bincount(labels.cpu().numpy(), minlength=no_of_classes)
 
     if args.weight_resampling == 'Naive':
-        # Naive re-weighting: weights are inversely proportional to the class frequencies
         weights = 1.0 / samples_per_class
     elif args.weight_resampling == 'Class-Balance':
-        # Class-Balance re-weighting using the effective number of samples
         effective_num = 1.0 - np.power(beta, samples_per_class)
         weights = (1.0 - beta) / np.array(effective_num)
     elif args.weight_resampling == 'Focal':
-        # Focal re-weighting: Adjust weights based on class frequency and the focusing parameter gamma
-        initial_weights = 1.0 / samples_per_class  # Start with inverse frequency
-        focal_weights = initial_weights ** gamma  # Apply focal adjustment
+        initial_weights = 1.0 / samples_per_class
+        focal_weights = initial_weights ** gamma
         weights = focal_weights
+    elif args.weight_resampling == 'none':
+        weights = torch.ones(len(labels), dtype=torch.float, device='cuda')
     else:
+        print(f"Unsupported weight computation method: {args.weight_resampling}")
         raise ValueError("Unsupported weight computation method")
 
-    # Normalize the weights such that their sum equals the number of classes
     weights = (weights / weights.sum()) * no_of_classes
-
-    # Convert the weights to a PyTorch tensor
-    weights = torch.tensor(weights, dtype=torch.float, device='cuda:0')
-
-    # Map weights to the corresponding labels to assign each label its corresponding weight
     weight_per_label = weights[labels]
-
     return weight_per_label
+
 
 
 
@@ -450,7 +444,7 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
         loss = criterion(logits, labels)
         
         # Apply weights manually if weight resampling is enabled
-        if args.weight_resampling is not None:
+        if args.weight_resampling != 'none':
             weights = compute_weights(labels, no_of_classes=no_of_classes)
             loss = (loss * weights).mean() 
 
@@ -562,9 +556,9 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         print(cm)
         plt.figure(figsize=(12, 10))
 
-        resampling_status = 'weight_resampling' if args.weight_resampling is not None else 'no_weight_resampling'
+        resampling_status = 'weight_resampling' if args.weight_resampling != 'none' else 'no_weight_resampling'
 
-        if args.weight_resampling:
+        if args.weight_resampling != 'none':
             title = (f"{args.model_type.capitalize()} on {args.dataset.capitalize()} dataset with "
             f"{'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()},\n"
             f"{args.weight_resampling}_{resampling_status.capitalize()},"
@@ -709,7 +703,7 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     # Define the base filename with weight resampling status
-    resampling_status = 'weight_resampling' if args.weight_resampling else 'no_weight_resampling'
+    resampling_status = 'weight_resampling' if args.weight_resampling !='none' else 'no_weight_resampling'
     if args.weight_resampling:
         base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{args.weight_resampling}_{resampling_status}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
     else:

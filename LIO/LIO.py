@@ -87,7 +87,7 @@ parser.add_argument('--model_type', type=str, help='[coteaching, coteaching_plus
 parser.add_argument('--fr_type', type=str, help='forget rate type', default='type_1')
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default=None, help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
-parser.add_argument('--weight_resampling', type=str, choices=['Naive', 'Focal', 'Class-Balance'], default=None, help='Select the weight resampling method if needed')
+parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
 
 args = parser.parse_args()
 
@@ -462,6 +462,11 @@ def train_lio(train_loader, model, optimizer, transition, epoch, criterion=nn.Cr
 
         # Compute the LIO loss incorporating noise transition
         loss = transition.loss(output, target) + gamma_tv * tv_regularization(num_pairs=10)(output)
+        # Apply weights manually if weight resampling is enabled
+        if args.weight_resampling != 'none':
+            weights = compute_weights(target, no_of_classes=output.size(1)) 
+            loss = (loss * weights).mean()
+
         loss.backward()
         optimizer.step()
 
@@ -581,9 +586,9 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         print(cm)
         plt.figure(figsize=(12, 10))
 
-        resampling_status = 'weight_resampling' if args.weight_resampling is not None else 'no_weight_resampling'
+        resampling_status = 'weight_resampling' if args.weight_resampling != 'none' else 'no_weight_resampling'
 
-        if args.weight_resampling:
+        if args.weight_resampling != 'none':
             title = (f"{args.model_type.capitalize()} on {args.dataset.capitalize()} dataset with "
             f"{'No Augmentation' if args.data_augmentation == 'none' else args.data_augmentation.capitalize()},\n"
             f"{args.weight_resampling}_{resampling_status.capitalize()},"
@@ -839,8 +844,8 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     # Define the base filename with weight resampling status
-    resampling_status = 'weight_resampling' if args.weight_resampling else 'no_weight_resampling'
-    if args.weight_resampling:
+    resampling_status = 'weight_resampling' if args.weight_resampling != 'none' else 'no_weight_resampling'
+    if args.weight_resampling != 'none':
         base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{args.weight_resampling}_{resampling_status}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
     else:
         base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{resampling_status}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
