@@ -76,7 +76,7 @@ parser.add_argument('--num_workers', type=int, default=1, help='how many subproc
 parser.add_argument('--epoch_decay_start', type=int, default=80)
 parser.add_argument('--model_type', type=str, help='[coteaching, coteaching_plus]', default='baseline')
 parser.add_argument('--fr_type', type=str, help='forget rate type', default='type_1')
-parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default=None, help='Data augmentation technique, if any')
+parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
 
@@ -357,27 +357,44 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
     
     return features[indices_to_keep], labels[indices_to_keep]
 
-def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0):
-    # Count each class's occurrence
-    samples_per_class = np.bincount(labels.cpu().numpy(), minlength=no_of_classes)
 
+def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'):
+    # Convert labels to a numpy array if it's a tensor
+    if isinstance(labels, torch.Tensor):
+        labels = labels.cpu().numpy()
+
+    # Count each class's occurrence
+    samples_per_class = np.bincount(labels, minlength=no_of_classes)
+
+    # Handling different weight resampling strategies
     if args.weight_resampling == 'Naive':
-        weights = 1.0 / samples_per_class
+        weights = 1.0 / (samples_per_class + 1e-9)
     elif args.weight_resampling == 'Class-Balance':
         effective_num = 1.0 - np.power(beta, samples_per_class)
-        weights = (1.0 - beta) / np.array(effective_num)
+        weights = (1.0 - beta) / (np.array(effective_num) + 1e-9)
     elif args.weight_resampling == 'Focal':
-        initial_weights = 1.0 / samples_per_class
+        initial_weights = 1.0 / (samples_per_class + 1e-9)
         focal_weights = initial_weights ** gamma
         weights = focal_weights
     elif args.weight_resampling == 'none':
-        weights = torch.ones(len(labels), dtype=torch.float, device='cuda')
+        weights = np.ones(no_of_classes, dtype=np.float32)
     else:
         print(f"Unsupported weight computation method: {args.weight_resampling}")
         raise ValueError("Unsupported weight computation method")
 
-    weights = (weights / weights.sum()) * no_of_classes
-    weight_per_label = weights[labels]
+    # Normalize weights to sum to number of classes
+    total_weight = np.sum(weights)
+    if total_weight == 0:
+        weights = np.ones(no_of_classes, dtype=np.float32)
+    else:
+        weights = (weights / total_weight) * no_of_classes
+
+    # Convert numpy weights to torch tensor and move to the specified device
+    weight_per_label = torch.from_numpy(weights).float().to(device)
+
+    # Index weights by labels
+    weight_per_label = weight_per_label[torch.from_numpy(labels).to(device)]
+    
     return weight_per_label
 
 

@@ -11,30 +11,30 @@ do
   do
     #Experiment 1
     # for noise_rate in "${noise_rates[@]}"; do
-    #     CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir ${result_dir}
+    #     CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
     # done
 
     # Experiment 2
     for noise_rate in "${noise_rates[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_2
+        CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_2$
     done
 
     # Experiment 3
     for imbalance_ratio in "${imbalance_ratios[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_3
+        CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_3$
     done
 
     # Experiment 4
     for noise_rate in "${noise_rates[@]}"; do
         for imbalance_ratio in "${imbalance_ratios[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_4
+            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_4$
         done
     done
 
     # Experiment 5
     for noise_rate in "${noise_rates[@]}"; do
         for noise_type in "${noise_types[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_5
+            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_5$
         done
     done
 
@@ -42,7 +42,7 @@ do
     for noise_rate in "${noise_rates[@]}"; do
         for noise_type in "${noise_types[@]}"; do
             for imbalance_ratio in "${imbalance_ratios[@]}"; do
-                CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_6
+                CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_6$
             done
         done
     done
@@ -52,7 +52,7 @@ do
         for noise_rate in "${noise_rates[@]}"; do
             for noise_type in "${noise_types[@]}"; do
                 for imbalance_ratio in "${imbalance_ratios[@]}"; do
-                    CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_7
+                    CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_7$
                 done
             done
         done
@@ -63,7 +63,7 @@ do
       for noise_rate in "${noise_rates[@]}"; do
         for noise_type in "${noise_types[@]}"; do
           for imbalance_ratio in "${imbalance_ratios[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation ${data_augmentation} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir ${result_dir}
+            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset windows_pe_real --model_type ${model_type} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_8$
           done
         done
       done
