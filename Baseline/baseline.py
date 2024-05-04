@@ -391,9 +391,6 @@ def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'
     return weight_per_label
 
 
-
-
-
 # Adjust learning rate and betas for Adam Optimizer
 mom1 = 0.9
 mom2 = 0.1
