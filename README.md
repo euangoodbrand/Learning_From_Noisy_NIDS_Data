@@ -12,7 +12,7 @@ This repository contains the code and datasets used in the research project focu
 
 # Applying Co-teaching on NIDS Dataset
 
-This repository contains a PyTorch implementation of the co-teaching and co-teaching+ methods adapted for a Network Intrusion Detection System (NIDS) dataset, inspired by the ICML'19 paper [How does Disagreement Help Generalization against Label Corruption?](https://arxiv.org/abs/1901.04215).
+This repository contains a PyTorch implementation of all the techniques described and cited below.
 
 ## Introduction
 
