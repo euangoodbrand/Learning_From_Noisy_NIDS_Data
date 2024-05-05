@@ -1,5 +1,10 @@
 # Learning_From_Noisy_NIDS_Data
 
+
+![Image Noise](https://github.com/euangoodbrand/Learning_From_Noisy_NIDS_Data/tree/main/Assets/image_noise.png)
+
+
+
 ## Overview
 This repository contains the code and datasets used in the research project focused on improving Network Intrusion Detection Systems (NIDS) through learning from noisy data. The project explores innovative techniques to address label noise, data imbalance, and concept drift in NIDS datasets. The objective is to develop robust models that are capable of performing accurately in adversarial environments typical of modern cybersecurity threats.
 
