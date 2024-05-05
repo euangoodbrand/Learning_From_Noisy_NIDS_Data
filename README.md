@@ -1,4 +1,4 @@
-# Learning_From_Noisy_NIDS_Data
+# Learning From Noisy NIDS Data
 
 ![Image Noise](https://github.com/euangoodbrand/Learning_From_Noisy_NIDS_Data/raw/main/Assets/image_noise_cleanup2.png)
 
@@ -13,8 +13,13 @@ This repository contains a PyTorch implementation of all the techniques describe
 
 ## Introduction
 
-Label noise is a common issue in real-world datasets, which can significantly degrade the performance of deep learning models. The co-teaching strategy involves training two neural networks simultaneously, where each network learns to teach the other network to select and learn from the most reliable samples. This project extends the application of co-teaching to the domain of network intrusion detection, aiming to improve the robustness and generalization of models against label noise in NIDS datasets.
+Our project focuses on enhancing Network Intrusion Detection Systems (NIDS) by addressing common challenges such as label noise, data imbalance, and concept drift. We explore various synthetic noise techniques, including uniform, feature-dependent, class-dependent, and a newly devised method called MIMICRY, to simulate real-world adversities.
 
+We conduct experiments on three datasets: CIC-IDS2017, real Windows PE, and a synthetic version of BODMAS, to ensure the relevance and applicability of our findings across diverse environments.
+
+To mitigate data imbalances, we investigate augmentation strategies such as downsampling, upsampling, SMOTE, and Adasyn. Additionally, we explore sample reweighting techniques like naive, focal, and class balance to address noisy labels.
+
+Furthermore, we explore novel noise learning techniques to enhance the adaptability and resilience of NIDS in detecting evolving cyber threats. Our project aims to contribute to the improvement of NIDS by rigorously testing and evaluating various methodologies.
 ## Requirements
 
 - Python 3.6+
@@ -25,13 +30,14 @@ Label noise is a common issue in real-world datasets, which can significantly de
 - numpy
 - tqdm
 
-## Dataset
+## Datasets
 
 The dataset used in this project is derived from [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html), a comprehensive dataset for network intrusion detection. The dataset contains various types of attacks simulated in a testbed to mirror real-world data, alongside benign traffic for a balanced representation.
 
-## Usage
+Windows PE and Synthetic BODMAS can be found at https://github.com/nuwuxian/morse/tree/main or directly through: https://tinyurl.com/skvw9n7j
 
-To run the co-teaching+ model on the NIDS dataset, adjust the parameters as needed and execute the following command:
+## Usage
+To run the techniques on the NIDS datasets, adjust the parameters as needed and execute the command, the following is specific to coteaching plus:
 
 ```bash
 python main.py --dataset cicids --model_type coteaching_plus --noise_type symmetric --noise_rate 0.2 data_augmentation none --seed 1 --num_workers 4 --result_dir results/trial_1/
