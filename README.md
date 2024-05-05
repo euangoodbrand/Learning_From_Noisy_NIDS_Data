@@ -1,8 +1,6 @@
 # Learning_From_Noisy_NIDS_Data
 
-
-![Image Noise](https://github.com/euangoodbrand/Learning_From_Noisy_NIDS_Data/tree/main/Assets/image_noise.png)
-
+![Image Noise](https://github.com/euangoodbrand/Learning_From_Noisy_NIDS_Data/raw/main/Assets/image_noise.png)
 
 
 ## Overview
