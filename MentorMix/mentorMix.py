@@ -75,7 +75,6 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['Naive', 'Focal', 'Class-Balance'], default=None, help='Select the weight resampling method if needed')
-
 args = parser.parse_args()
 
 # Seed
@@ -446,46 +445,6 @@ def accuracy(logit, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
-
-def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
-    model.train()  # Set model to training mode
-    train_total = 0
-    train_correct = 0
-    total_loss = 0
-
-    for i, (data, labels, _) in enumerate(train_loader):
-        data, labels = data.cuda(), labels.cuda()
-        logits = model(data)
-
-        # Compute the standard CrossEntropyLoss
-        loss = criterion(logits, labels)
-        
-        # Apply weights manually if weight resampling is enabled
-        if args.weight_resampling is not None:
-            weights = compute_weights(labels, no_of_classes=no_of_classes)
-            loss = (loss * weights).mean() 
-
-        # Backward pass and optimization
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        _, predicted = torch.max(logits.data, 1)
-        train_total += labels.size(0)
-        train_correct += (predicted == labels).sum().item()
-        total_loss += loss.item()
-
-        # if (i + 1) % args.print_freq == 0:
-        #     print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
-        #           % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
-
-    print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
-                  % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
-
-    train_acc = 100. * train_correct / train_total
-    return train_acc
-
-
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
     cleaned_name = re.sub(r'[^a-zA-Z0-9]+', ' ', class_name)
@@ -664,12 +623,113 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 
+def train(args, MentorNet, StudentNet, train_dataloader, optimizer_M, optimizer_S, scheduler_M, scheduler_S, BCE_loss, CE_loss, loss_p_prev, epoch):
+    MentorNet.train()
+    StudentNet.train()
+    MentorNet_loss = 0
+    StudentNet_loss = 0
+    p_bar = tqdm(range(train_dataloader.__len__()))
+    loss_average = 0
+    for batch_idx, (inputs, targets, v_true, v_label, index) in enumerate(train_dataloader):
+        inputs = inputs.to(args.device)
+        targets = targets.to(args.device)
+        v_label = v_label.to(args.device)
+        bsz = inputs.shape[0]
+
+        with torch.no_grad():
+            outputs = StudentNet(inputs)
+            loss = F.cross_entropy(outputs, targets,reduction='none')
+            loss_p = args.ema*loss_p_prev + (1-args.ema)*sorted(loss)[int(bsz*args.gamma_p-1)]
+            loss_diff = loss-loss_p
+        
+        if args.MentorNet_type == 'PD':
+            assert args.noise_rate==0.          
+            v_true = (loss_diff<0).long().to(args.device)   # closed-form optimal solution
+            
+            if epoch < int(args.epoch*0.2):
+                v_true = torch.bernoulli(torch.ones_like(loss_diff)/2).to(args.device)
+
+        '''
+        Train MentorNet.
+        calculate the gradient of the MentorNet.
+        '''
+        v = MentorNet(v_label,args.epoch, epoch,loss,loss_diff)
+        loss = BCE_loss(v,v_true.type(torch.FloatTensor).to(args.device))
+        MentorNet_loss+=loss.item()
+
+        optimizer_M.zero_grad()
+        loss.backward()
+        optimizer_M.step()
+
+        for count, idx in enumerate(index):
+            train_dataloader.dataset.v_label[idx] = v_true[count].long()
+                
+        '''
+        Train StudentNet
+        calculate the gradient of the StudentNet
+        '''
+        v = v.detach()
+        outputs = StudentNet(inputs)
+        loss_S = F.cross_entropy(outputs,targets,reduction='none')
+        loss_S = loss_S*v
+        loss_S = loss_S.mean()
+        StudentNet_loss += loss_S.item()
+
+        optimizer_S.zero_grad()
+        loss_S.backward()
+        optimizer_S.step()
+
+        p_bar.set_description("Train Epoch: {epoch}/{epochs:2}. Iter: {batch:4}/{iter:4}. LR: {lr:.6f}. S_loss: {StudentNet_loss:.4f}. l_p: {threshold_loss:.3f}".format(
+                    epoch=epoch + 1,
+                    epochs=args.epoch,
+                    batch=batch_idx + 1,
+                    iter=train_dataloader.__len__(),
+                    lr=scheduler_S.optimizer.param_groups[0]['lr'],
+                    StudentNet_loss = StudentNet_loss/(batch_idx+1),
+                    threshold_loss= loss_p,)
+                    )
+        p_bar.update()
+    p_bar.close()
+
+    return loss_p
+
+def train_with_mentor(loader, student, mentor, optimizer, criterion, epoch, num_classes):
+    student.train()
+    mentor.eval()  # Make sure mentor is not updating weights
+    total_accuracy = 0
+    total_loss = 0
+    for data, labels, _ in loader:
+        data, labels = data.cuda(), labels.cuda()
+        with torch.no_grad():
+            mentor_output = mentor(data)
+        # Here you might adjust labels or weights based on mentor_output
+        
+        student_output = student(data)
+        loss = criterion(student_output, labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        total_loss += loss.item()
+        _, predicted = torch.max(student_output.data, 1)
+        total_accuracy += (predicted == labels).sum().item()
+    
+    total_accuracy /= len(loader.dataset)
+    print(f'Epoch {epoch+1}: Train Loss: {total_loss / len(loader)}, Accuracy: {total_accuracy}')
+    return total_accuracy
 
 
 def main():
     print(model_str)
-    print(model_str)
-    print(model_str)
+
+
+    # Optimizer and scheduler setup
+    learning_rate = 0.1
+    weight_decay = 0.0002
+    momentum = 0.9
+    nesterov = False
+
+
     label_encoder = LabelEncoder()
 
     if args.dataset == 'CIC_IDS_2017':
@@ -828,10 +888,23 @@ def main():
         val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))  # Assuming this is your clean data reserved for validation
         val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-        model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
-        model.apply(weights_init)
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        # Initialize MentorNet with more complex architecture
+        mentornet = MLPNet(num_features=X_train.shape[1], num_classes=len(np.unique(y_train)), layers=[256, 128, 64]).cuda()
+
+        # Initialize StudentNet with a simpler architecture
+        studentnet = MLPNet(num_features=X_train.shape[1], num_classes=len(np.unique(y_train)), layers=[128, 64]).cuda()
+        
+        mentornet.apply(weights_init)
+        studentnet.apply(weights_init)
+        
+        optimizer_mentor = optim.Adam(mentornet.parameters(), lr=0.001)
+        criterion_mentor = nn.CrossEntropyLoss()
         criterion = nn.CrossEntropyLoss()
+        # Training MentorNet
+        for epoch in range(50):  # You may choose fewer epochs depending on convergence
+            train_accuracy = train(train_loader, mentornet, optimizer_mentor, criterion_mentor, epoch)
+            print(f'MentorNet Training Epoch: {epoch+1}, Accuracy: {train_accuracy}')
+
 
         for epoch in range(args.n_epoch):
             train(train_loader, model, optimizer, criterion, epoch, len(np.unique(y_train_fold)))
