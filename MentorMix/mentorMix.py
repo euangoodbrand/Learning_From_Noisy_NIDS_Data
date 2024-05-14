@@ -709,9 +709,9 @@ def train_student(args, MentorNet, StudentNet, train_dataloader, optimizer_S, sc
         loss, loss_p_prev, loss_p_second_prev, v = MentorMixLoss(args, MentorNet, StudentNet, inputs, targets, v_label, loss_p_prev, loss_p_second_prev, epoch)
         
         # Apply weights manually if weight resampling is enabled
-        if args.weight_resampling != 'none':
-            weights = compute_weights(targets, no_of_classes=np.unique(train_dataloader))
-            loss = (loss * weights).mean() 
+        # if args.weight_resampling != 'none':
+        #     weights = compute_weights(targets, no_of_classes=np.unique(train_dataloader))
+        #     loss = (loss * weights).mean() 
 
         # Update v
         train_dataloader.dataset.update_v_labels(index, v.long())
