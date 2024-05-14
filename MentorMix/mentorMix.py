@@ -1,6 +1,9 @@
 # -*- coding:utf-8 -*-
-from __future__ import print_function 
+from __future__ import print_function
+
+from tqdm import tqdm
 from model import MLPNet
+from MentorNet import MentorNet_arch
 
 # General Imports
 import os
@@ -47,6 +50,8 @@ import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
 
+from MentorMixLoss import MentorMixLoss
+
 for dirname, _, filenames in os.walk('/data'):
     for filename in filenames:
         print(os.path.join(dirname, filename))
@@ -58,13 +63,18 @@ nRowsRead = None
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--lr', type=float, default=0.0001)
+parser.add_argument('--gamma_p', type=float, default=0.75)
+parser.add_argument('--ema', type=float, default=0.05)
+
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
 parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
+parser.add_argument('--alpha', type=float, help='corruption rate, should be less than 1', default=2.0)
+
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
 parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=150)
+parser.add_argument('--n_epoch', type=int, default=10)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=10)
@@ -99,18 +109,27 @@ elif args.dataset == "BODMAS":
 
 
 class CICIDSDataset(Dataset):
-    def __init__(self, features, labels, noise_or_not):
-        self.features = features
+    def __init__(self, data, labels, noise_or_not):
+        self.data = data
         self.labels = labels
-        self.noise_or_not = noise_or_not 
-
-    def __getitem__(self, index):
-        feature = torch.tensor(self.features[index], dtype=torch.float32)
-        label = torch.tensor(self.labels[index], dtype=torch.long)
-        return feature, label, index  
+        self.noise_or_not = noise_or_not
+        self.v_label = torch.zeros(len(labels), dtype=torch.long).to('cuda')  # Initialize v_label to zeros and move to GPU if available
 
     def __len__(self):
-        return len(self.labels)
+        return len(self.data)
+
+    def __getitem__(self, index):
+        data = self.data[index]
+        label = self.labels[index]
+        noise_status = self.noise_or_not[index]
+        v_label = self.v_label[index]  # Get the current v_label for this index
+        return data, label, noise_status, v_label, index
+
+    def update_v_labels(self, indices, v_values):
+        indices = indices.to(self.v_label.device)  # Ensure indices are on the same device as v_label
+        v_values = v_values.to(self.v_label.device)  # Ensure v_values are on the same device as v_label
+        self.v_label[indices] = v_values
+
 
 
 if args.forget_rate is None:
@@ -350,15 +369,21 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
     
     return features[indices_to_keep], labels[indices_to_keep]
 
-
 def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'):
     # Convert labels to a numpy array if it's a tensor
     if isinstance(labels, torch.Tensor):
         labels = labels.cpu().numpy()
 
+    # Ensure labels are integers
+    labels = labels.astype(int)
+
+    # Print debug information
+    print(f"labels: {labels}")
+    print(f"no_of_classes: {no_of_classes}")
+    
     # Count each class's occurrence
     samples_per_class = np.bincount(labels, minlength=no_of_classes)
-
+    
     # Handling different weight resampling strategies
     if args.weight_resampling == 'Naive':
         weights = 1.0 / (samples_per_class + 1e-9)
@@ -389,6 +414,8 @@ def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'
     weight_per_label = weight_per_label[torch.from_numpy(labels).to(device)]
     
     return weight_per_label
+
+
 
 
 
@@ -458,7 +485,12 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
     all_labels = []
     
     with torch.no_grad():
-        for data, labels, _ in test_loader:
+        for items in test_loader:
+            if len(items) == 5:
+                data, labels, _, _, _ = items  # Adjusting unpacking for five returned items
+            else:
+                data, labels, _ = items  # Original unpacking for three items
+            
             data = data.cuda()
             labels = labels.cuda()
             outputs = model(data)
@@ -622,101 +654,114 @@ def handle_inf_nan(features_np):
     scaler = StandardScaler()
     return scaler.fit_transform(features_np)
 
-
 def train(args, MentorNet, StudentNet, train_dataloader, optimizer_M, optimizer_S, scheduler_M, scheduler_S, BCE_loss, CE_loss, loss_p_prev, epoch):
     MentorNet.train()
     StudentNet.train()
     MentorNet_loss = 0
     StudentNet_loss = 0
-    p_bar = tqdm(range(train_dataloader.__len__()))
-    loss_average = 0
+    p_bar = tqdm(total=len(train_dataloader), desc='Training')
+
     for batch_idx, (inputs, targets, v_true, v_label, index) in enumerate(train_dataloader):
-        inputs = inputs.to(args.device)
-        targets = targets.to(args.device)
-        v_label = v_label.to(args.device)
-        bsz = inputs.shape[0]
+        inputs, targets, v_label = inputs.cuda(), targets.cuda(), v_label.cuda()
 
-        with torch.no_grad():
-            outputs = StudentNet(inputs)
-            loss = F.cross_entropy(outputs, targets,reduction='none')
-            loss_p = args.ema*loss_p_prev + (1-args.ema)*sorted(loss)[int(bsz*args.gamma_p-1)]
-            loss_diff = loss-loss_p
+        # Forward pass for StudentNet
+        outputs = StudentNet(inputs)
+        loss = F.cross_entropy(outputs, targets, reduction='none')
         
-        if args.MentorNet_type == 'PD':
-            assert args.noise_rate==0.          
-            v_true = (loss_diff<0).long().to(args.device)   # closed-form optimal solution
-            
-            if epoch < int(args.epoch*0.2):
-                v_true = torch.bernoulli(torch.ones_like(loss_diff)/2).to(args.device)
+        # Sort losses and calculate the threshold loss_p
+        sorted_losses, _ = torch.sort(loss)
+        loss_p = sorted_losses[int(len(sorted_losses) * args.gamma_p)].item()
+        loss_diff = loss - loss_p
 
-        '''
-        Train MentorNet.
-        calculate the gradient of the MentorNet.
-        '''
-        v = MentorNet(v_label,args.epoch, epoch,loss,loss_diff)
-        loss = BCE_loss(v,v_true.type(torch.FloatTensor).to(args.device))
-        MentorNet_loss+=loss.item()
+        # Train MentorNet
+        v_predicted = MentorNet(v_label, args.n_epoch, epoch, loss.detach(), loss_diff.detach())  # Ensure MentorNet does not backprop through StudentNet
+        v_true_adjusted = ((loss_diff < 0) * 1).float().cuda()  # Simple simulation for v_true
+
+        loss_M = BCE_loss(v_predicted, v_true_adjusted)
+        MentorNet_loss += loss_M.item()
 
         optimizer_M.zero_grad()
-        loss.backward()
+        loss_M.backward()
         optimizer_M.step()
 
-        for count, idx in enumerate(index):
-            train_dataloader.dataset.v_label[idx] = v_true[count].long()
-                
-        '''
-        Train StudentNet
-        calculate the gradient of the StudentNet
-        '''
-        v = v.detach()
-        outputs = StudentNet(inputs)
-        loss_S = F.cross_entropy(outputs,targets,reduction='none')
-        loss_S = loss_S*v
-        loss_S = loss_S.mean()
+        # Train StudentNet
+        loss_S = (loss * v_predicted.detach()).mean()  # Detach v_predicted to prevent gradients flowing into MentorNet
         StudentNet_loss += loss_S.item()
 
         optimizer_S.zero_grad()
-        loss_S.backward()
+        loss_S.backward()  # No need to retain graph here, as MentorNet does not depend on StudentNet's gradients
         optimizer_S.step()
 
-        p_bar.set_description("Train Epoch: {epoch}/{epochs:2}. Iter: {batch:4}/{iter:4}. LR: {lr:.6f}. S_loss: {StudentNet_loss:.4f}. l_p: {threshold_loss:.3f}".format(
+        p_bar.update(1)
+        p_bar.set_postfix({'Student Loss': StudentNet_loss / (batch_idx + 1), 'Mentor Loss': MentorNet_loss / (batch_idx + 1)})
+
+    p_bar.close()
+    return loss_p
+
+
+def train_student(args, MentorNet, StudentNet, train_dataloader, optimizer_S, scheduler_S, loss_p_prev, loss_p_second_prev, epoch):
+    StudentNet.train()
+    train_loss = 0
+    p_bar = tqdm(range(train_dataloader.__len__()))
+
+    loss_average = 0
+    for batch_idx, (inputs, targets, _, v_label, index) in enumerate(train_dataloader):
+        loss, loss_p_prev, loss_p_second_prev, v = MentorMixLoss(args, MentorNet, StudentNet, inputs, targets, v_label, loss_p_prev, loss_p_second_prev, epoch)
+        
+        # Apply weights manually if weight resampling is enabled
+        if args.weight_resampling != 'none':
+            weights = compute_weights(targets, no_of_classes=np.unique(train_dataloader))
+            loss = (loss * weights).mean() 
+
+        # Update v
+        train_dataloader.dataset.update_v_labels(index, v.long())
+
+        optimizer_S.zero_grad()
+        loss.backward()
+        optimizer_S.step()
+        train_loss += loss.item()
+        p_bar.set_description("Train Epoch: {epoch}/{epochs:2}. Iter: {batch:4}/{iter:4}. LR: {lr:.6f}. loss: {loss:.4f}.".format(
                     epoch=epoch + 1,
-                    epochs=args.epoch,
+                    epochs=args.n_epoch,
                     batch=batch_idx + 1,
                     iter=train_dataloader.__len__(),
                     lr=scheduler_S.optimizer.param_groups[0]['lr'],
-                    StudentNet_loss = StudentNet_loss/(batch_idx+1),
-                    threshold_loss= loss_p,)
+                    loss=train_loss/(batch_idx+1))
                     )
         p_bar.update()
     p_bar.close()
+    return loss_p_prev, loss_p_second_prev
 
-    return loss_p
 
-def train_with_mentor(loader, student, mentor, optimizer, criterion, epoch, num_classes):
-    student.train()
-    mentor.eval()  # Make sure mentor is not updating weights
-    total_accuracy = 0
-    total_loss = 0
-    for data, labels, _ in loader:
-        data, labels = data.cuda(), labels.cuda()
-        with torch.no_grad():
-            mentor_output = mentor(data)
-        # Here you might adjust labels or weights based on mentor_output
-        
-        student_output = student(data)
-        loss = criterion(student_output, labels)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        total_loss += loss.item()
-        _, predicted = torch.max(student_output.data, 1)
-        total_accuracy += (predicted == labels).sum().item()
-    
-    total_accuracy /= len(loader.dataset)
-    print(f'Epoch {epoch+1}: Train Loss: {total_loss / len(loader)}, Accuracy: {total_accuracy}')
-    return total_accuracy
+def test(args, StudentNet, test_dataloader, optimizer_S, scheduler_S, epoch):
+    StudentNet.eval()
+    test_loss = 0
+    acc = 0
+    p_bar = tqdm(range(test_dataloader.__len__()))
+    with torch.no_grad():
+        for batch_idx, items in enumerate(test_dataloader):
+            if len(items) == 5:
+                inputs, targets, _, _, _ = items  # Adjusting unpacking for five returned items
+            else:
+                inputs, targets = items  # Original unpacking for two items
+            
+            inputs, targets = inputs.cuda(), targets.cuda()
+            outputs = StudentNet(inputs)
+            loss = F.cross_entropy(outputs, targets)
+            test_loss += loss.item()
+            p_bar.set_description("Test Epoch: {epoch}/{epochs:4}. Iter: {batch:4}/{iter:4}. LR: {lr:.6f}. Loss: {loss:.4f}.".format(
+                    epoch=1,
+                    epochs=1,
+                    batch=batch_idx + 1,
+                    iter=test_dataloader.__len__(),
+                    lr=scheduler_S.optimizer.param_groups[0]['lr'],
+                    loss=test_loss/(batch_idx+1)))
+            p_bar.update()
+            acc += (outputs.argmax(dim=1) == targets).sum().item()
+    p_bar.close()
+    acc = acc / test_dataloader.dataset.__len__()
+    print('Accuracy :' + '%0.4f' % acc)
+    return acc
 
 
 def main():
@@ -791,8 +836,6 @@ def main():
     full_dataset_metrics_file = os.path.join(results_dir, f"{base_filename}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
 
-
-
     # Prepare CSV file for validation metrics
     with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
@@ -856,8 +899,7 @@ def main():
     X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
 
     if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
-        # Recalculate noise_or_not to match the augmented data size
-        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
+        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool) 
 
     # Print class distribution after data augmentation
     print("After augmentation:")
@@ -871,12 +913,12 @@ def main():
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
     results = []
     fold = 0
-    for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
-        # print(f"Max train_idx: {max(train_idx)}, Max val_idx: {max(val_idx)}")  # Debug indices
+
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X_train_augmented, y_train_augmented), start=1):      
         if max(train_idx) >= len(noise_or_not) or max(val_idx) >= len(noise_or_not):
             print("IndexError: Index is out of bounds for noise_or_not array.")
-            continue  
-        fold += 1
+            continue
+
         X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
         y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
         noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
@@ -884,72 +926,161 @@ def main():
         train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
-        # Use clean data for validation - separate clean validation data not affected by noise or augmentation
-        val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))  # Assuming this is your clean data reserved for validation
+        val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))
         val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
         # Initialize MentorNet with more complex architecture
-        mentornet = MLPNet(num_features=X_train.shape[1], num_classes=len(np.unique(y_train)), layers=[256, 128, 64]).cuda()
+        mentornet = MentorNet_arch().cuda()  
 
-        # Initialize StudentNet with a simpler architecture
-        studentnet = MLPNet(num_features=X_train.shape[1], num_classes=len(np.unique(y_train)), layers=[128, 64]).cuda()
-        
+        studentnet = MLPNet(num_features=X_train.shape[1], num_classes=len(np.unique(y_train)), dataset=args.dataset).cuda()
+
         mentornet.apply(weights_init)
         studentnet.apply(weights_init)
-        
-        optimizer_mentor = optim.Adam(mentornet.parameters(), lr=0.001)
-        criterion_mentor = nn.CrossEntropyLoss()
-        criterion = nn.CrossEntropyLoss()
-        # Training MentorNet
-        for epoch in range(50):  # You may choose fewer epochs depending on convergence
-            train_accuracy = train(train_loader, mentornet, optimizer_mentor, criterion_mentor, epoch)
-            print(f'MentorNet Training Epoch: {epoch+1}, Accuracy: {train_accuracy}')
 
+        optimizer_mentor = optim.Adam(mentornet.parameters(), lr=0.001)
+        optimizer_student = optim.Adam(studentnet.parameters(), lr=0.001)
+
+        criterion_mentor = nn.CrossEntropyLoss()
+        criterion_mentor  = nn.CrossEntropyLoss()
+
+        scheduler_mentor = optim.lr_scheduler.StepLR(optimizer_mentor, step_size=30, gamma=0.1)
+        scheduler_student = optim.lr_scheduler.StepLR(optimizer_student, step_size=30, gamma=0.1)
+
+        loss_p_prev = 0  # Initialize previous period loss variable
 
         for epoch in range(args.n_epoch):
-            train(train_loader, model, optimizer, criterion, epoch, len(np.unique(y_train_fold)))
-            metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
+            loss_p_prev = train(args, mentornet, studentnet, train_loader, optimizer_mentor, optimizer_student, scheduler_mentor, scheduler_student, criterion_mentor, criterion_mentor, loss_p_prev, epoch)
+            
+            # Evaluate the model using the custom evaluate function
+            evaluation_metrics = evaluate(val_loader, studentnet, label_encoder, args, save_conf_matrix=True, return_predictions=False)
+            print(f"Evaluation Metrics for Epoch {epoch+1}: {evaluation_metrics}")
+
+            scheduler_mentor.step()
+            scheduler_student.step()
+
+            path_MentorNet = './checkpoint/MentorNet'
+            if not os.path.isdir(path_MentorNet):
+                os.makedirs(path_MentorNet)
+
+            MentorNet_filename = f"{path_MentorNet}/MentorNet_Fold_{fold}"
+            torch.save(mentornet.state_dict(), MentorNet_filename + f'_Epoch_{epoch+1}.pt')
+
+
+        # second training run for student after mentor has been trained
+        
+        path_MentorNet = './checkpoint/MentorNet'
+        latest_epoch = args.n_epoch  
+        MentorNet_filename = f"{path_MentorNet}/MentorNet_Fold_{fold}_Epoch_{latest_epoch}.pt"
+
+        # Load the trained MentorNet
+        mentornet = MentorNet_arch().cuda()
+        mentornet.load_state_dict(torch.load(MentorNet_filename))
+        mentornet.eval() 
+
+        # Reinitialize StudentNet
+        studentnet = MLPNet(num_features=X_train.shape[1], num_classes=len(np.unique(y_train)), dataset=args.dataset).cuda()
+        studentnet.apply(weights_init)  # Apply initializations as before
+
+        # Setup optimizer and scheduler for the new StudentNet
+        optimizer_student = optim.Adam(studentnet.parameters(), lr=0.001)
+        scheduler_student = optim.lr_scheduler.StepLR(optimizer_student, step_size=30, gamma=0.1)
+
+        # Define the loss function for StudentNet, assuming it remains the same
+        criterion_student = nn.CrossEntropyLoss()
+
+
+        path_base = './checkpoint'
+        # Directory for saving the specific fold's best model
+        fold_dir = f'{path_base}/{args.dataset}/{args.model_type}_Fold_{fold}'
+        if not os.path.exists(fold_dir):
+            os.makedirs(fold_dir)
+
+        best_acc=0
+        loss_p_prev = 0
+        loss_p_second_prev = 0
+        for epoch in range(args.n_epoch):
+            loss_p_prev, loss_p_second_prev = train_student(args, mentornet, studentnet, train_loader, optimizer_student, scheduler_student, loss_p_prev, loss_p_second_prev, epoch)
+            
+            
+            evaluation_metrics = evaluate(val_loader, studentnet, label_encoder, args, save_conf_matrix=True, return_predictions=False)
+            print(f"Evaluation Metrics for Epoch {epoch+1}: {evaluation_metrics}")
+            acc = test(args, studentnet, val_loader, optimizer_student, scheduler_student, epoch)
+
+            
+            scheduler_student.step()
+            if best_acc < acc:
+                best_acc = acc
+                # Define the path for saving the model
+                model_path = f"{fold_dir}/Best_StudentNet_Epoch_{epoch+1}.pth"
+                torch.save(studentnet.state_dict(), model_path)
+                print(f"Saved improved model to {model_path}")
 
             # Update metrics with Fold and Epoch at the beginning
-            row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
+            row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(evaluation_metrics.items()))
             with open(validation_metrics_file, "a", newline='',encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writerow(row_data)
 
-    print("Training completed. Results from all folds:")
-    for i, result in enumerate(results, 1):
-        print(f'Results Fold {i}:', result)
 
-    # Full dataset training
-    print("Training on the full dataset...")
-    # Prepare the full augmented dataset for training
+    # Initialize and train MentorNet on the full dataset
+    print("Initializing and training MentorNet on the full dataset...")
+    mentornet = MentorNet_arch().cuda()
+    studentnet = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
+
+    mentornet.apply(weights_init)
+    studentnet.apply(weights_init)
+
+    optimizer_mentor = optim.Adam(mentornet.parameters(), lr=0.001)
+    optimizer_student = optim.Adam(studentnet.parameters(), lr=0.001)
+    scheduler_mentor = optim.lr_scheduler.StepLR(optimizer_mentor, step_size=30, gamma=0.1)
+    scheduler_student = optim.lr_scheduler.StepLR(optimizer_student, step_size=30, gamma=0.1)
+    criterion_mentor = nn.CrossEntropyLoss()
+    criterion_student = nn.CrossEntropyLoss()
+
     full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
     full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
-    # Prepare the full model
-    full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
-    full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
-    full_criterion = CrossEntropyLoss()
-
-    # Train on the full augmented dataset
-    print("Training on the full augmented dataset...")
+    loss_p_prev = 0  # Initialize previous period loss variable for custom train function
     for epoch in range(args.n_epoch):
-        train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
+        loss_p_prev = train(args, mentornet, studentnet, full_train_loader, optimizer_mentor, optimizer_student, scheduler_mentor, scheduler_student, criterion_mentor, criterion_student, loss_p_prev, epoch)
+        scheduler_mentor.step()
+        scheduler_student.step()
 
+    # Save the trained MentorNet model
+    path_MentorNet = './checkpoint/MentorNet'
+    if not os.path.isdir(path_MentorNet):
+        os.makedirs(path_MentorNet)
+    MentorNet_filename = f"{path_MentorNet}/MentorNet_Final_Epoch_{args.n_epoch}.pt"
+    torch.save(mentornet.state_dict(), MentorNet_filename)
 
+    # Load the trained MentorNet to guide the training of a new StudentNet
+    print("Loading trained MentorNet to guide the training of a new StudentNet...")
+    mentornet.load_state_dict(torch.load(MentorNet_filename))
+    mentornet.eval()  # Set MentorNet to evaluation mode
 
+    # Reinitialize and train a new StudentNet with guidance from MentorNet
+    print("Reinitializing and training a new StudentNet with guidance from MentorNet...")
+    new_studentnet = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
+    new_studentnet.apply(weights_init)
+    optimizer_new_student = optim.Adam(new_studentnet.parameters(), lr=0.001)
+    scheduler_new_student = optim.lr_scheduler.StepLR(optimizer_new_student, step_size=30, gamma=0.1)
+    criterion_new_student = nn.CrossEntropyLoss()
 
-    # Prepare clean data for evaluation
+    loss_p_prev = 0
+    loss_p_second_prev = 0
+    for epoch in range(args.n_epoch):
+        loss_p_prev, loss_p_second_prev = train_student(args, mentornet, new_studentnet, full_train_loader, optimizer_new_student, scheduler_new_student, loss_p_prev, loss_p_second_prev, epoch)
+        scheduler_new_student.step()
+
+    # Evaluate the final trained new StudentNet
+    print("Evaluating the final trained new StudentNet on clean dataset...")
     clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
     clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-    # Evaluate the full model on clean dataset and save predictions
-    print("Evaluating on clean dataset...")
-    full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
-    predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
+    full_metrics = evaluate(clean_test_loader, new_studentnet, label_encoder, args, save_conf_matrix=True)
+    predictions = evaluate(clean_test_loader, new_studentnet, label_encoder, args, return_predictions=True)
 
-    # Save predictions
+    # Save predictions and results
     predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
     os.makedirs(predictions_dir, exist_ok=True)
     predictions_filename = os.path.join(predictions_dir, f"{args.dataset}_final_predictions.csv")

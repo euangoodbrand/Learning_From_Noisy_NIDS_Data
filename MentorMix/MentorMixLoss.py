@@ -4,66 +4,67 @@ import torch.nn.functional as F
 import torch.distributions.categorical as cat
 import torch.distributions.dirichlet as diri
 
-def MentorMixLoss(args,MentorNet, StudentNet, x_i, y_i,v_true, loss_p_prev, loss_p_second_prev, epoch):
-    '''
-    v_true is set to 0s in this version.
-    inputs : 
-        x_i         [bsz,C,H,W]
-        outputs_i   [bsz,num_class]
-        y_i         [bsz]
-    intermediate :
-        x_j         [bsz,C,H,W]
-        outputs_j   [bsz,num_class]
-        y_j         [bsz]
-    outputs:
-        loss        [float]
-        gamma       [float]
-
-    Simple threshold function is used as MentorNet in this repository.
-    '''
+def MentorMixLoss(args, MentorNet, StudentNet, x_i, y_i, v_true, loss_p_prev, loss_p_second_prev, epoch):
     XLoss = torch.nn.CrossEntropyLoss(reduction='none')
-    # MentorNet 1
     bsz = x_i.shape[0]
-    x_i, y_i,v_true = x_i.to(args.device), y_i.to(args.device), v_true.to(args.device)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    x_i, y_i, v_true = x_i.to(device), y_i.to(device), v_true.to(device)
+
     with torch.no_grad():
-        outputs_i = StudentNet(x_i) 
-        loss = F.cross_entropy(outputs_i,y_i,reduction='none')                      
-        loss_p = args.ema*loss_p_prev + (1-args.ema)*sorted(loss)[int(bsz*args.gamma_p)]
-        loss_diff = loss-loss_p
-        v = MentorNet(v_true,args.epoch, epoch,loss,loss_diff)   
+        outputs_i = StudentNet(x_i)
+        loss = F.cross_entropy(outputs_i, y_i, reduction='none')
+        sorted_losses = torch.sort(loss).values
+        loss_p = args.ema * loss_p_prev + (1 - args.ema) * sorted_losses[int(bsz * args.gamma_p)]
+        loss_diff = loss - loss_p
+        v = MentorNet(v_true, args.n_epoch, epoch, loss, loss_diff)
 
-        # Burn-in Process(needed?)
-        if epoch < int(args.epoch*0.2):
-            v = torch.bernoulli(torch.ones_like(loss_diff)/2).to(args.device)
+        if epoch < int(args.n_epoch * 0.2):
+            v = torch.bernoulli(torch.ones_like(loss_diff) / 2).to(device)
 
-    P_v = cat.Categorical(F.softmax(v,dim=0))           
-    indices_j = P_v.sample(y_i.shape)                   
-    
-    # Prepare Mixup
+    P_v = cat.Categorical(F.softmax(v, dim=0))
+    indices_j = P_v.sample((bsz,))
+
     x_j = x_i[indices_j]
     y_j = y_i[indices_j]
-    
-    # MIXUP
-    Beta = diri.Dirichlet(torch.tensor([args.alpha for _ in range(2)]))
-    lambdas = Beta.sample(y_i.shape).to(args.device)
-    lambdas_max = lambdas.max(dim=1)[0]                 
-    lambdas = v*lambdas_max + (1-v)*(1-lambdas_max)     
-    x_tilde = x_i * lambdas.view(lambdas.size(0),1,1,1) + x_j * (1-lambdas).view(lambdas.size(0),1,1,1)
+
+    Beta = diri.Dirichlet(torch.tensor([args.alpha] * 2).to(device))
+    lambdas = Beta.sample([bsz]).to(device)
+    lambdas_max = lambdas.max(dim=1)[0]
+    lambdas = v * lambdas_max + (1 - v) * (1 - lambdas_max)
+
+    lambdas_expanded = lambdas.view(bsz, 1).expand_as(x_i)
+    x_tilde = x_i * lambdas_expanded + x_j * (1 - lambdas_expanded)
     outputs_tilde = StudentNet(x_tilde)
-    
-    # Second Reweight
+
+    print("x_i shape:", x_i.shape)
+    print("y_i shape:", y_i.shape)
+    print("outputs_i shape:", outputs_i.shape)
+    print("Before mixup - x_i shape:", x_i.shape)
+    print("Before mixup - x_j shape:", x_j.shape)
+    print("Lambdas shape:", lambdas.shape)
+    print("After mixup - x_tilde shape:", x_tilde.shape)
+    print("After mixup - outputs_tilde shape:", outputs_tilde.shape)
+
+    # Ensure the outputs are in the correct shape
+    if outputs_tilde.dim() > 2:
+        outputs_tilde = outputs_tilde.view(bsz, -1)
+
+    print("outputs_tilde shape after view:", outputs_tilde.shape)
+
+    mixed_loss_i = XLoss(outputs_tilde, y_i)
+    mixed_loss_j = XLoss(outputs_tilde, y_j)
+    final_loss = lambdas * mixed_loss_i + (1 - lambdas) * mixed_loss_j
+
     with torch.no_grad():
-        loss = lambdas*XLoss(outputs_tilde,y_i) + (1-lambdas)*XLoss(outputs_tilde,y_j)
-        loss_p_second = args.ema*loss_p_second_prev + (1-args.ema)*sorted(loss)[int(bsz*args.gamma_p)]
-        loss_diff = loss-loss_p_second
-        v_mix = MentorNet(v_true,args.epoch, epoch,loss,loss_diff)
+        sorted_final_loss = torch.sort(final_loss).values
+        loss_p_second = args.ema * loss_p_second_prev + (1 - args.ema) * sorted_final_loss[int(bsz * args.gamma_p)]
+        loss_diff = final_loss - loss_p_second
+        v_mix = MentorNet(v_true, args.n_epoch, epoch, final_loss, loss_diff)
 
-        # Burn-in Process(needed?)
-        if epoch < int(args.epoch*0.2):
-            v_mix = torch.bernoulli(torch.ones_like(loss_diff)/2).to(args.device)
+        if epoch < int(args.n_epoch * 0.2):
+            v_mix = torch.bernoulli(torch.ones_like(loss_diff) / 2).to(device)
 
-    loss = lambdas*XLoss(outputs_tilde,y_i) + (1-lambdas)*XLoss(outputs_tilde,y_j)
-    loss = loss*v_mix
-  
-    return loss.mean(), loss_p, loss_p_second, v
-    
+    final_loss = final_loss * v_mix
+
+    return final_loss.mean(), loss_p, loss_p_second, v
