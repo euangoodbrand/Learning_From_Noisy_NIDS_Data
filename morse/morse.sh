@@ -1,5 +1,6 @@
 num_workers=0
-noise_rates=(0 0.1 0.3 0.6)
+# noise_rates=(0 0.1 0.3 0.6)
+noise_rates=(0.6)
 imbalance_ratios=(0 0.05 0.01)
 noise_types=("uniform" "class" "feature" "MIMICRY")
 data_augmentations=("none" "undersampling" "oversampling" "smote" "adasyn")
@@ -15,9 +16,9 @@ do
     # done
 
     # # Experiment 2
-    # for noise_rate in "${noise_rates[@]}"; do
-    #     CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_2$
-    # done
+    for noise_rate in "${noise_rates[@]}"; do
+        CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_2$
+    done
 
     # # Experiment 3
     # for imbalance_ratio in "${imbalance_ratios[@]}"; do
@@ -58,16 +59,16 @@ do
     #     done
     # done
 
-    # Experiment 8 morse, windows PE, all combinations of noise rate, noise type, and imbalance  ratios with sample re-weighting techniques
-    for weight_resampling in "${weight_resamplings[@]}"; do
-      for noise_rate in "${noise_rates[@]}"; do
-        for noise_type in "${noise_types[@]}"; do
-          for imbalance_ratio in "${imbalance_ratios[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_8$
-          done
-        done
-      done
-    done
+    # # Experiment 8 morse, windows PE, all combinations of noise rate, noise type, and imbalance  ratios with sample re-weighting techniques
+    # for weight_resampling in "${weight_resamplings[@]}"; do
+    #   for noise_rate in "${noise_rates[@]}"; do
+    #     for noise_type in "${noise_types[@]}"; do
+    #       for imbalance_ratio in "${imbalance_ratios[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_8$
+    #       done
+    #     done
+    #   done
+    # done
 
   done
 done

@@ -78,7 +78,7 @@ parser.add_argument('--gamma', type=float, default=0.95, metavar='M',help='Learn
 parser.add_argument('--lambda-u', default=1.0, type=float,
                     help='coefficient of unlabeled loss')
 parser.add_argument('--num_class', type=int, default=None, help='number of classes in the dataset')
-parser.add_argument('--warmup', type=int, default=5) # 5 for malware-real, 10 for malware-syn
+parser.add_argument('--warmup', type=int, default=10) # 5 for malware-real, 10 for malware-syn
 parser.add_argument('--clean_theta', default=0.95, type=float)
 parser.add_argument('--use_hard_labels', default=False, type=bool) # soft version is better than hard label
 parser.add_argument('--use_scl', default=False, type=bool)
@@ -86,7 +86,7 @@ parser.add_argument('--lambda-s', default=0.1, type=float)
 parser.add_argument('--dist_alignment', default=False, type=bool)
 parser.add_argument('--dist_alignment_eps', default=1e-6, type=float)
 parser.add_argument('--dist_alignment_batches', default=5, type=int)
-parser.add_argument('--reweight_start', default=20, type=int) # 40 for malware-real
+parser.add_argument('--reweight_start', default=30, type=int) # 40 for malware-real otherwise 20
 parser.add_argument('--imb_method', default='reweight', type=str)   # default is 're-weight'
 parser.add_argument('--use_pretrain', default=True, type=bool)
 parser.add_argument('--lr', type=float, default=0.0001)
@@ -96,7 +96,7 @@ parser.add_argument('--forget_rate', type=float, help='forget rate', default=Non
 parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=150)
+parser.add_argument('--n_epoch', type=int, default=30)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=10)
@@ -743,11 +743,20 @@ def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb
         # print(f"Shape of xs: {xs.shape}")
         # print(f"Shape of x_imb_l: {x_imb_l.shape}")
 
-        # Reshape xs to [128, 1024] if necessary
-        if xs.ndim == 2 and xs.shape[1] == 1:
-            xs = xs.view(-1, 1024)
-        elif xs.ndim == 1:
-            xs = xs.unsqueeze(1).repeat(1, 1024)
+
+        if args.dataset == 'windows_pe_real':
+            # Reshape xs to [128, 1024] if necessary
+            if xs.ndim == 2 and xs.shape[1] == 1:
+                xs = xs.view(-1, 1024)
+            elif xs.ndim == 1:
+                xs = xs.unsqueeze(1).repeat(1, 1024)
+
+        elif args.dataset == 'BODMAS':
+            # Reshape xs to [128, 2381] if necessary
+            if xs.ndim == 2 and xs.shape[1] == 1:
+                xs = xs.view(-1, 2381)
+            elif xs.ndim == 1:
+                xs = xs.unsqueeze(1).repeat(1, 2381)
 
         logits_xw = model(xw)
         logits_xs = model(xs)

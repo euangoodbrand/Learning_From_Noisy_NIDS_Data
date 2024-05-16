@@ -36,3 +36,33 @@
 - Noise significantly impacts performance more than data imbalance.
 - Regularization and appropriate noise handling techniques are crucial for improving performance.
 - Continued research is required to accurately measure and handle noise in network intrusion detection data.
+
+
+
+### Problem
+The primary issue observed is the significant drop in performance after the initial epochs during training, likely due to overfitting to noisy labels. This overfitting is indicated by the models performing well initially but then learning the noise, leading to degraded performance.
+
+### Mitigation Strategies
+To address the overfitting and improve the robustness of models to label noise, consider implementing the following strategies:
+
+1. **Early Stopping:**
+   - Monitor validation performance and stop training when performance starts to degrade.
+   - This prevents the model from overfitting to noisy labels.
+
+2. **Regularization Techniques:**
+   - Use L2 regularization (weight decay) to penalize large weights.
+   - Incorporate dropout layers to prevent overfitting by randomly dropping units during training.
+
+3. **Label Smoothing:**
+   - Apply label smoothing to soften the labels, reducing sensitivity to noise.
+
+
+### Best Perfomig Methods
+Morse performs the best followed by LIO close second, and then GCE. Co-teaching is very strong also but with unpredictable training and very large swings, a concern that this would not generalise well at all for different data distributions/ shifts.
+
+
+### Comparison to MORSE(Grim Reality) paper
+Morse performs the best as expected from the paper, the rest of the techniques dont perform that much better or worse than baseline except for morse and LIO, LIO is different from the paper.
+In the morse paper LIO was the worst performer but for us it is the best.
+In the paper except for MORSE, noise adaptation performed the best but our reserch showed the oposite also with GCE performing worse across the metrics. It should be noted that the difference between these techniques is not large so increased numbers of runs should be performed to confirm these numbers.
+
