@@ -2,4 +2,24 @@ data/*.csv
 *.csv
 data/
 *.pyc
+*.png
 results/
+
+# Exclude compiled Python files and cache
+__pycache__/
+
+# Exclude PNG image files
+*.png
+
+# Exclude CSV files
+*.csv
+
+# Exclude NPZ files
+*.npz
+
+# Exclude MD5 files
+*.md5
+
+*.pt
+
+*.pth
