@@ -809,7 +809,8 @@ def main():
     full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
     full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
-    full_criterion = CrossEntropyLoss()
+    full_criterion = nn.KLDivLoss(reduction='batchmean') # Label smoothing criterion as label smoothing produces prop distributions
+
 
     # Train on the full augmented dataset
     print("Training on the full augmented dataset...")
