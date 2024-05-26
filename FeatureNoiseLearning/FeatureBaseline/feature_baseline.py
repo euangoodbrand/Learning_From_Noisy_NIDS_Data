@@ -688,6 +688,7 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 
+
 def main():
     print(model_str)
     label_encoder = LabelEncoder()
@@ -812,8 +813,6 @@ def main():
         print(f"Length of label_noise_or_not (adjusted if necessary): {len(label_noise_or_not)}")
         print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
-        # Full dataset training
-        print("Training on the full dataset...")
         # Prepare the full augmented dataset for training
         full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, label_noise_or_not)
         full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
@@ -822,7 +821,7 @@ def main():
         full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
         full_model.apply(weights_init)
         full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
-        full_criterion = nn.KLDivLoss(reduction='batchmean') # Label smoothing criterion as label smoothing produces prop distributions
+        full_criterion = nn.KLDivLoss(reduction='batchmean')  # Label smoothing criterion as label smoothing produces prop distributions
 
         # Train on the full augmented dataset
         print("Training on the full augmented dataset...")
@@ -854,4 +853,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
