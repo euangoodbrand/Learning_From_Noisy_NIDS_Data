@@ -1,60 +1,134 @@
-# Applying Co-teaching on NIDS Dataset
+---
 
-This repository contains a PyTorch implementation of the co-teaching and co-teaching+ methods adapted for a Network Intrusion Detection System (NIDS) dataset, inspired by the ICML'19 paper [How does Disagreement Help Generalization against Label Corruption?](https://arxiv.org/abs/1901.04215).
+# Evaluating Dropout for Robustness to Feature Noise
+
+![Feature Noise](https://github.com/euangoodbrand/Learning_From_Noisy_NIDS_Data/raw/main/Assets/image_noise_cleanup2.png)
+
+## Overview
+This repository contains the code and datasets used to evaluate the effectiveness of dropout as a regularization technique to improve robustness against feature noise in machine learning models. The project aims to investigate how well dropout can mitigate the impact of feature noise on model performance.
 
 ## Introduction
 
-Label noise is a common issue in real-world datasets, which can significantly degrade the performance of deep learning models. The co-teaching strategy involves training two neural networks simultaneously, where each network learns to teach the other network to select and learn from the most reliable samples. This project extends the application of co-teaching to the domain of network intrusion detection, aiming to improve the robustness and generalization of models against label noise in NIDS datasets.
+Feature noise is a common issue in real-world datasets, where the input features may be corrupted by various types of noise. This project explores the application of dropout, a popular regularization technique, to see if it can enhance the model's robustness against such noise.
+
+### Dropout
+
+Dropout is a regularization technique that involves randomly dropping units (along with their connections) from the neural network during training. This helps prevent units from co-adapting too much and can improve the generalization of the model.
+
+### Feature Noise
+
+Feature noise involves adding random noise to the input features during training to simulate real-world data corruptions. This project specifically tests the impact of Gaussian noise on the features and evaluates the model's performance with and without dropout.
 
 ## Requirements
 
 - Python 3.6+
 - PyTorch 1.7.0+
 - scikit-learn
-- imbalanced-learn
 - pandas
 - numpy
 - tqdm
 
-## Dataset
+## Implementation
 
-The dataset used in this project is derived from [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html), a comprehensive dataset for network intrusion detection. The dataset contains various types of attacks simulated in a testbed to mirror real-world data, alongside benign traffic for a balanced representation.
+The model architecture and the implementation details are provided below. We use a Multi-Layer Perceptron (MLP) model as the base architecture.
+
+### Model Definition
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MLPNet(nn.Module):
+    def __init__(self, num_features=78, num_classes=15, dropout_rate=0.5):
+        super(MLPNet, self).__init__()
+        self.fc1 = nn.Linear(num_features, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, 128)
+        self.fc4 = nn.Linear(128, num_classes)
+        self.dropout = nn.Dropout(dropout_rate)
+
+        self._initialize_weights()
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)  # Apply dropout after first layer
+        x = F.relu(self.fc2(x))
+        x = self.dropout(x)  # Apply dropout after second layer
+        x = F.relu(self.fc3(x))
+        x = self.dropout(x)  # Apply dropout after third layer
+        x = self.fc4(x)
+        return x
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+def add_gaussian_noise(inputs, mean=0.0, std=0.1):
+    noise = torch.randn_like(inputs) * std + mean
+    return inputs + noise
+```
+
+### Training Script
+
+```python
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+
+# Example dataset (replace with actual dataset)
+train_data = torch.randn(1000, 78)
+train_labels = torch.randint(0, 15, (1000,))
+train_dataset = TensorDataset(train_data, train_labels)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+
+model = MLPNet()
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=0.0005)
+
+def train(model, train_loader, criterion, optimizer, noise_std=0.1):
+    model.train()
+    for data, target in train_loader:
+        data = add_gaussian_noise(data, std=noise_std)
+        optimizer.zero_grad()
+        output = model(data)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+
+# Training the model
+for epoch in range(10):
+    train(model, train_loader, criterion, optimizer, noise_std=0.1)
+```
 
 ## Usage
 
-To run the co-teaching+ model on the NIDS dataset, adjust the parameters as needed and execute the following command:
+To run the training script and evaluate the model with feature noise and dropout:
 
 ```bash
-python main.py --dataset cicids --model_type coteaching_plus --noise_type symmetric --noise_rate 0.2 --seed 1 --num_workers 4 --result_dir results/trial_1/
+python train.py
 ```
-
-## Customization
-
-- `--lr`: Learning rate for the optimizer.
-- `--noise_rate`: The simulated rate of label noise in the dataset.
-- `--num_gradual`: Specifies how many epochs for linear drop rate.
-- `--num_workers`: The number of subprocesses to use for data loading.
-- Additional arguments are available in `main.py` for further customization.
 
 ## Citation
 
-If you find this implementation helpful for your research, please consider citing the original paper:
+If you find this implementation helpful for your research, please consider citing:
 
 ```bash
-@inproceedings{yu2019does,
-  title={How does Disagreement Help Generalization against Label Corruption?},
-  author={Yu, Xingrui and Han, Bo and Yao, Jiangchao and Niu, Gang and Tsang, Ivor and Sugiyama, Masashi},
-  booktitle={International Conference on Machine Learning},
-  pages={7164--7173},
-  year={2019}
+@article{srivastava2014dropout,
+  title={Dropout: A simple way to prevent neural networks from overfitting},
+  author={Srivastava, Nitish and Hinton, Geoffrey and Krizhevsky, Alex and Sutskever, Ilya and Salakhutdinov, Ruslan},
+  journal={Journal of machine learning research},
+  volume={15},
+  number={1},
+  pages={1929--1958},
+  year={2014}
 }
 ```
 
-Additionally, if you utilize this adaptation for your research, please reference this repository and the dataset accordingly.
-
-
 ## Acknowledgments
 
-This project is inspired by the work of Xingrui Yu et al., on leveraging disagreement for improving generalization in the presence of label noise. Our adaptation focuses on the specific challenges posed by the NIDS domain.
+This project is inspired by various works in the field of machine learning and regularization techniques. Special thanks to the contributors and the community for their continuous support and inspiration.
 
-Feel free to adjust the content to better suit your project or presentation needs.
+---
