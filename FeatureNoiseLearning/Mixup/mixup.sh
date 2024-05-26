@@ -1,11 +1,14 @@
 #!/bin/bash
 
 num_workers=0
-feature_add_noise_levels=(0.0 0.1 0.3 0.6)
-feature_mult_noise_levels=(0.0 0.1 0.3 0.6)
+feature_add_noise_levels=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
+feature_mult_noise_levels=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 imbalance_ratios=(0 0.05 0.01)
 data_augmentations=("none" "undersampling" "oversampling" "smote" "adasyn")
 weight_resamplings=("Class-Balance" "Focal" "Naive")
+
+start_time=$(date +%s)
+
 
 for seed in 1 #2 3 4 5 
 do
@@ -30,3 +33,6 @@ do
 
   done
 done
+end_time=$(date +%s)
+elapsed_time=$((end_time - start_time))
+echo "Total time taken: $(($elapsed_time / 3600)) hours $(($elapsed_time % 3600 / 60)) minutes $(($elapsed_time % 60)) seconds"

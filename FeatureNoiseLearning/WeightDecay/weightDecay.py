@@ -127,22 +127,28 @@ else:
 
 
 def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
-    device = x.device  # Get the device of the input tensor
-    add_noise = torch.zeros_like(x, device=device)  # Initialize additive noise as a tensor
-    mult_noise = torch.ones_like(x, device=device)  # Initialize multiplicative noise as a tensor
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
 
     if add_noise_level > 0.0:
-        # Generate additive noise with a beta distribution and scale it
-        add_noise = add_noise_level * np.random.beta(2, 5) * torch.randn_like(x, device=device)
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
 
     if mult_noise_level > 0.0:
-        # Generate multiplicative noise with a beta distribution and scale it
-        mult_noise = 1 + mult_noise_level * np.random.beta(2, 5) * (2 * torch.rand_like(x, device=device) - 1)
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
     
-    # Applying non-linear transformation to increase the effect of the noise
-    add_noise = torch.sign(add_noise) * (torch.abs(add_noise) ** 50)
-    mult_noise = torch.sign(mult_noise) * (torch.abs(mult_noise) ** 50)
-
     return mult_noise * x + add_noise
 
 def introduce_noise(labels, features, label_noise_type, label_noise_rate):
@@ -684,8 +690,6 @@ def handle_inf_nan(features_np):
 
 def main():
     print(model_str)
-    print(model_str)
-    print(model_str)
     label_encoder = LabelEncoder()
 
     if args.dataset == 'CIC_IDS_2017':
@@ -702,7 +706,6 @@ def main():
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
         features_np = handle_inf_nan(features_np)
 
-        # Splitting the data into training, test, and a clean test set
         X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
         X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
@@ -725,16 +728,10 @@ def main():
             X_test, y_test = data['X_test'], data['y_test']
         y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
-
-        # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
-
-    # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
-
-    # Define the base filename with weight resampling status
     resampling_status = 'weight_resampling' if args.weight_resampling != 'none' else 'no_weight_resampling'
     label_noise_str = f"{args.label_noise_type}-label-noise{args.label_noise_rate}_" if args.label_noise_rate > 0 else ""
     if args.weight_resampling:
@@ -742,114 +739,90 @@ def main():
     else:
         base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{resampling_status}_{label_noise_str}add-noise{args.feature_add_noise_level}_mult-noise{args.feature_mult_noise_level}_imbalance{args.imbalance_ratio}"
 
-    # File paths for CSV and model files
     full_dataset_metrics_file = os.path.join(results_dir, f"{base_filename}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
 
-    # Prepare CSV file for validation metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'Class {label + 1}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'windows_pe_real':
             labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-                    "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
+                      "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                      "InstallMonster", "Locky"]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in labels]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-    # Print the original dataset sizes and class distribution
-    print("Original dataset:")
-    print(f"Length of X_train: {len(X_train)}")
-    print(f"Length of y_train: {len(y_train)}")
-    print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
+    metrics_sum = {key: 0 for key in fieldnames if key not in ['Fold', 'Epoch']}
 
-    # Apply imbalance to the training dataset
-    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+    for run in range(3):
+        print(f"Run {run + 1}/3")
 
-    # Print class distribution after applying imbalance
-    print("Before introducing noise:")
-    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-    print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
-    print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
+        print("Original dataset:")
+        print(f"Length of X_train: {len(X_train)}")
+        print(f"Length of y_train: {len(y_train)}")
+        print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
 
-    # Introduce noise to the imbalanced data
-    y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
+        X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
 
-    # Print class distribution after introducing noise
-    print("Before augmentation:")
-    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-    print(f"Length of y_train__label_noisy: {len(y_train__label_noisy)}")
-    print(f"Length of label_noise_or_not: {len(label_noise_or_not)}")
-    print("Class distribution after introducing noise:", {label: np.sum(y_train__label_noisy == label) for label in np.unique(y_train__label_noisy)})
+        print("Before introducing noise:")
+        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+        print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
+        print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
 
-    # Apply data augmentation to the noisy data
-    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train__label_noisy, args.data_augmentation)
+        y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
 
-    if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
-        # Recalculate label_noise_or_not to match the augmented data size
-        label_noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the label_noise_or_not array size and values as needed
+        print("Before augmentation:")
+        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+        print(f"Length of y_train__label_noisy: {len(y_train__label_noisy)}")
+        print(f"Length of label_noise_or_not: {len(label_noise_or_not)}")
+        print("Class distribution after introducing noise:", {label: np.sum(y_train__label_noisy == label) for label in np.unique(y_train__label_noisy)})
 
-    # Print class distribution after data augmentation
-    print("After augmentation:")
-    print(f"Length of X_train_augmented: {len(X_train_augmented)}")
-    print(f"Length of y_train_augmented: {len(y_train_augmented)}")
-    print(f"Length of label_noise_or_not (adjusted if necessary): {len(label_noise_or_not)}")
-    print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
+        X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train__label_noisy, args.data_augmentation)
 
-    # Full dataset training
-    print("Training on the full dataset...")
-    # Prepare the full augmented dataset for training
-    full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, label_noise_or_not)
-    full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+        if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
+            label_noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
 
-    # Prepare the full model
-    full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
-    full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)  #Weight decay added here
-    full_criterion = CrossEntropyLoss()
+        print("After augmentation:")
+        print(f"Length of X_train_augmented: {len(X_train_augmented)}")
+        print(f"Length of y_train_augmented: {len(y_train_augmented)}")
+        print(f"Length of label_noise_or_not (adjusted if necessary): {len(label_noise_or_not)}")
+        print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
-    # Train on the full augmented dataset
-    print("Training on the full augmented dataset...")
-    for epoch in range(args.n_epoch):
-        train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
+        full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, label_noise_or_not)
+        full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
+        full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
+        full_model.apply(weights_init)
+        full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        full_criterion = CrossEntropyLoss()
 
-    # Prepare clean data for evaluation
-    clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
-    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+        print("Training on the full augmented dataset...")
+        for epoch in range(args.n_epoch):
+            train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
 
-    # Evaluate the full model on clean dataset and save predictions
-    print("Evaluating on clean dataset...")
-    full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
-    predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
+        clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
+        clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-    # Save predictions
-    predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
-    os.makedirs(predictions_dir, exist_ok=True)
-    predictions_filename = os.path.join(predictions_dir, f"{base_filename}_final_predictions.csv")
-    with open(predictions_filename, 'w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Predicted Label'])
-        for pred in predictions:
-            writer.writerow([pred])
+        print("Evaluating on clean dataset...")
+        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=(run == 0))
 
-    print(f"Predictions saved to {predictions_filename}")
+        for key in metrics_sum.keys():
+            metrics_sum[key] += full_metrics[key]
 
-    # Record the evaluation results
-    row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', epoch)] + list(full_metrics.items()))
+    metrics_avg = {key: value / 3 for key, value in metrics_sum.items()}
+
+    row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', 'Average')] + list(metrics_avg.items()))
     with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerow(row_data)
 
-    print("Final evaluation completed.")
-
+    print("Final evaluation completed. Average metrics saved.")
 
 if __name__ == '__main__':
     main()
-

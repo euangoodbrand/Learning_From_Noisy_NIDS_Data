@@ -146,22 +146,28 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
     return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
-    device = x.device  # Get the device of the input tensor
-    add_noise = torch.zeros_like(x, device=device)  # Initialize additive noise as a tensor
-    mult_noise = torch.ones_like(x, device=device)  # Initialize multiplicative noise as a tensor
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
 
     if add_noise_level > 0.0:
-        # Generate additive noise with a beta distribution and scale it
-        add_noise = add_noise_level * np.random.beta(2, 5) * torch.randn_like(x, device=device)
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
 
     if mult_noise_level > 0.0:
-        # Generate multiplicative noise with a beta distribution and scale it
-        mult_noise = 1 + mult_noise_level * np.random.beta(2, 5) * (2 * torch.rand_like(x, device=device) - 1)
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
     
-    # Applying non-linear transformation to increase the effect of the noise
-    add_noise = torch.sign(add_noise) * (torch.abs(add_noise) ** 50)
-    mult_noise = torch.sign(mult_noise) * (torch.abs(mult_noise) ** 50)
-
     return mult_noise * x + add_noise
 
 def introduce_noise(labels, features, label_noise_type, label_noise_rate):

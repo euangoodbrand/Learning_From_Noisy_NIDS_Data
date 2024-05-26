@@ -64,7 +64,7 @@ parser.add_argument('--forget_rate', type=float, help='forget rate', default=Non
 parser.add_argument('--label_noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=200)
+parser.add_argument('--n_epoch', type=int, default=50)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=10)
@@ -124,22 +124,28 @@ else:
 
 
 def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
-    device = x.device  # Get the device of the input tensor
-    add_noise = torch.zeros_like(x, device=device)  # Initialize additive noise as a tensor
-    mult_noise = torch.ones_like(x, device=device)  # Initialize multiplicative noise as a tensor
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
 
     if add_noise_level > 0.0:
-        # Generate additive noise with a beta distribution and scale it
-        add_noise = add_noise_level * np.random.beta(2, 5) * torch.randn_like(x, device=device)
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
 
     if mult_noise_level > 0.0:
-        # Generate multiplicative noise with a beta distribution and scale it
-        mult_noise = 1 + mult_noise_level * np.random.beta(2, 5) * (2 * torch.rand_like(x, device=device) - 1)
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
     
-    # Applying non-linear transformation to increase the effect of the noise
-    add_noise = torch.sign(add_noise) * (torch.abs(add_noise) ** 50)
-    mult_noise = torch.sign(mult_noise) * (torch.abs(mult_noise) ** 50)
-
     return mult_noise * x + add_noise
 
 def introduce_noise(labels, features, label_noise_type, label_noise_rate):
@@ -771,7 +777,8 @@ def main():
     metrics_sum = {key: 0 for key in fieldnames if key not in ['Fold', 'Epoch']}
 
     # Run the training and evaluation three times
-    for run in range(3):
+    n_runs = 3
+    for run in range(n_runs):
         print(f"Run {run + 1}/3")
         
         # Print the original dataset sizes and class distribution
@@ -841,7 +848,7 @@ def main():
             metrics_sum[key] += full_metrics[key]
 
     # Calculate the average metrics
-    metrics_avg = {key: value / 3 for key, value in metrics_sum.items()}
+    metrics_avg = {key: value / n_runs for key, value in metrics_sum.items()}
 
     # Save the average metrics to the CSV file
     row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', 'Average')] + list(metrics_avg.items()))
