@@ -463,6 +463,9 @@ def accuracy(logit, target, topk=(1,)):
     return res
 
 
+def one_hot_encode(labels, num_classes):
+    return torch.eye(num_classes, device=labels.device)[labels]
+
 # Apply the noise function in the training loop and print results
 def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
     model.train()  # Set model to training mode
@@ -476,8 +479,14 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
         # Apply feature noise
         data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
 
+        # Forward pass
         logits = model(data)
-        loss = criterion(logits, labels)
+        
+        # One-hot encode labels and convert logits to log probabilities
+        labels_one_hot = one_hot_encode(labels, no_of_classes)
+        log_logits = F.log_softmax(logits, dim=1)
+        
+        loss = criterion(log_logits, labels_one_hot)
 
         # Apply weights manually if weight resampling is enabled
         if args.weight_resampling != 'none':
