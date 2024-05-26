@@ -1,134 +1,233 @@
----
+# Learning From Noisy NIDS Data
 
-# Evaluating Dropout for Robustness to Feature Noise
+![Image Noise](https://github.com/euangoodbrand/Learning_From_Noisy_NIDS_Data/raw/main/Assets/image_noise_cleanup2.png)
 
-![Feature Noise](https://github.com/euangoodbrand/Learning_From_Noisy_NIDS_Data/raw/main/Assets/image_noise_cleanup2.png)
 
 ## Overview
-This repository contains the code and datasets used to evaluate the effectiveness of dropout as a regularization technique to improve robustness against feature noise in machine learning models. The project aims to investigate how well dropout can mitigate the impact of feature noise on model performance.
+This repository contains the code and datasets used in the research project focused on improving Network Intrusion Detection Systems (NIDS) through learning from noisy data. The project explores innovative techniques to address label noise, data imbalance, and concept drift in NIDS datasets. The objective is to develop robust models that are capable of performing accurately in adversarial environments typical of modern cybersecurity threats.
+
+
+# Applying Co-teaching on NIDS Dataset
+
+This repository contains a PyTorch implementation of all the techniques described and cited below.
 
 ## Introduction
 
-Feature noise is a common issue in real-world datasets, where the input features may be corrupted by various types of noise. This project explores the application of dropout, a popular regularization technique, to see if it can enhance the model's robustness against such noise.
+Our project focuses on enhancing Network Intrusion Detection Systems (NIDS) by addressing common challenges such as label noise, data imbalance, and concept drift. We explore various synthetic noise techniques, including uniform, feature-dependent, class-dependent, and a newly devised method called MIMICRY, to simulate real-world adversities.
 
-### Dropout
+We conduct experiments on three datasets: CIC-IDS2017, real Windows PE, and a synthetic version of BODMAS, to ensure the relevance and applicability of our findings across diverse environments.
 
-Dropout is a regularization technique that involves randomly dropping units (along with their connections) from the neural network during training. This helps prevent units from co-adapting too much and can improve the generalization of the model.
+To mitigate data imbalances, we investigate augmentation strategies such as downsampling, upsampling, SMOTE, and Adasyn. Additionally, we explore sample reweighting techniques like naive, focal, and class balance to address noisy labels.
 
-### Feature Noise
-
-Feature noise involves adding random noise to the input features during training to simulate real-world data corruptions. This project specifically tests the impact of Gaussian noise on the features and evaluates the model's performance with and without dropout.
-
+Furthermore, we explore novel noise learning techniques to enhance the adaptability and resilience of NIDS in detecting evolving cyber threats. Our project aims to contribute to the improvement of NIDS by rigorously testing and evaluating various methodologies.
 ## Requirements
 
 - Python 3.6+
 - PyTorch 1.7.0+
 - scikit-learn
+- imbalanced-learn
 - pandas
 - numpy
 - tqdm
 
-## Implementation
+## Datasets
 
-The model architecture and the implementation details are provided below. We use a Multi-Layer Perceptron (MLP) model as the base architecture.
+The dataset used in this project is derived from [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html), a comprehensive dataset for network intrusion detection. The dataset contains various types of attacks simulated in a testbed to mirror real-world data, alongside benign traffic for a balanced representation.
 
-### Model Definition
-
-```python
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class MLPNet(nn.Module):
-    def __init__(self, num_features=78, num_classes=15, dropout_rate=0.5):
-        super(MLPNet, self).__init__()
-        self.fc1 = nn.Linear(num_features, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 128)
-        self.fc4 = nn.Linear(128, num_classes)
-        self.dropout = nn.Dropout(dropout_rate)
-
-        self._initialize_weights()
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)  # Apply dropout after first layer
-        x = F.relu(self.fc2(x))
-        x = self.dropout(x)  # Apply dropout after second layer
-        x = F.relu(self.fc3(x))
-        x = self.dropout(x)  # Apply dropout after third layer
-        x = self.fc4(x)
-        return x
-
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-
-def add_gaussian_noise(inputs, mean=0.0, std=0.1):
-    noise = torch.randn_like(inputs) * std + mean
-    return inputs + noise
-```
-
-### Training Script
-
-```python
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-
-# Example dataset (replace with actual dataset)
-train_data = torch.randn(1000, 78)
-train_labels = torch.randint(0, 15, (1000,))
-train_dataset = TensorDataset(train_data, train_labels)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-
-model = MLPNet()
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=0.0005)
-
-def train(model, train_loader, criterion, optimizer, noise_std=0.1):
-    model.train()
-    for data, target in train_loader:
-        data = add_gaussian_noise(data, std=noise_std)
-        optimizer.zero_grad()
-        output = model(data)
-        loss = criterion(output, target)
-        loss.backward()
-        optimizer.step()
-
-# Training the model
-for epoch in range(10):
-    train(model, train_loader, criterion, optimizer, noise_std=0.1)
-```
+Windows PE and Synthetic BODMAS can be found at https://github.com/nuwuxian/morse/tree/main or directly through: https://tinyurl.com/skvw9n7j
 
 ## Usage
-
-To run the training script and evaluate the model with feature noise and dropout:
+To run the techniques on the NIDS datasets, adjust the parameters as needed and execute the command, the following is specific to coteaching plus:
 
 ```bash
-python train.py
+python main.py --dataset cicids --model_type coteaching_plus --noise_type symmetric --noise_rate 0.2 data_augmentation none --seed 1 --num_workers 4 --result_dir results/trial_1/
 ```
+
+## Customization
+
+- `--lr`: Learning rate for the optimizer.
+- `--noise_rate`: The simulated rate of label noise in the dataset.
+- `--num_gradual`: Specifies how many epochs for linear drop rate.
+- `--num_workers`: The number of subprocesses to use for data loading.
+- Additional arguments are available in `main.py` for further customization.
 
 ## Citation
 
-If you find this implementation helpful for your research, please consider citing:
+If you find this implementation helpful for your research, please consider citing the original papers:
 
 ```bash
-@article{srivastava2014dropout,
-  title={Dropout: A simple way to prevent neural networks from overfitting},
-  author={Srivastava, Nitish and Hinton, Geoffrey and Krizhevsky, Alex and Sutskever, Ilya and Salakhutdinov, Ruslan},
-  journal={Journal of machine learning research},
-  volume={15},
-  number={1},
-  pages={1929--1958},
-  year={2014}
+@INPROCEEDINGS{10179453,
+  author={Wu, Xian and Guo, Wenbo and Yan, Jia and Coskun, Baris and Xing, Xinyu},
+  booktitle={2023 IEEE Symposium on Security and Privacy (SP)}, 
+  title={From Grim Reality to Practical Solution: Malware Classification in Real-World Noise}, 
+  year={2023},
+  volume={},
+  number={},
+  pages={2602-2619},
+  keywords={Training;Text mining;Privacy;Supervised learning;Training data;Semisupervised learning;Malware},
+  doi={10.1109/SP46215.2023.10179453}}
+```
+
+
+### Co-Teaching
+
+#### link https://arxiv.org/abs/1804.06872
+```bash
+@misc{han2018coteaching,
+      title={Co-teaching: Robust Training of Deep Neural Networks with Extremely Noisy Labels}, 
+      author={Bo Han and Quanming Yao and Xingrui Yu and Gang Niu and Miao Xu and Weihua Hu and Ivor Tsang and Masashi Sugiyama},
+      year={2018},
+      eprint={1804.06872},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
 }
 ```
 
+### Co-Teaching + 
+
+#### link: https://arxiv.org/abs/1901.04215
+```bash
+
+@misc{yu2019does,
+      title={How does Disagreement Help Generalization against Label Corruption?}, 
+      author={Xingrui Yu and Bo Han and Jiangchao Yao and Gang Niu and Ivor W. Tsang and Masashi Sugiyama},
+      year={2019},
+      eprint={1901.04215},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+```
+
+
+### Mentor Mix
+
+#### link : https://arxiv.org/pdf/1911.09781.pdfhttps://proceedings.mlr.press/v119/jiang20c/jiang20c.pdf
+```bash
+
+@inproceedings{jiang2020beyond,
+  title={Beyond synthetic noise: Deep learning on controlled noisy labels},
+  author={Jiang, L. and Huang, D. and Liu, M. and Yang, W.},
+  booktitle={International Conference on Machine Learning (ICML)},
+  year={2020}
+}
+```
+
+### Bootstrap
+
+#### link: https://arxiv.org/abs/1412.6596
+```
+
+@misc{reed2015training,
+      title={Training Deep Neural Networks on Noisy Labels with Bootstrapping}, 
+      author={Scott Reed and Honglak Lee and Dragomir Anguelov and Christian Szegedy and Dumitru Erhan and Andrew Rabinovich},
+      year={2015},
+      eprint={1412.6596},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+
+```
+
+### LRT
+
+#### Link : https://arxiv.org/pdf/2011.10077.pdf
+
+```bash
+
+@InProceedings{zheng2020error,
+  title = 	 {Error-Bounded Correction of Noisy Labels},
+  author =       {Zheng, Songzhu and Wu, Pengxiang and Goswami, Aman and Goswami, Mayank and Metaxas, Dimitris and Chen, Chao},
+  booktitle = 	 {Proceedings of the 37th International Conference on Machine Learning},
+  pages = 	 {11447--11457},
+  year = 	 {2020},
+  editor = 	 {III, Hal Daumé and Singh, Aarti},
+  volume = 	 {119},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {13--18 Jul},
+  publisher =    {PMLR},
+  pdf = 	 {http://proceedings.mlr.press/v119/zheng20c/zheng20c.pdf},
+  url = 	 {https://proceedings.mlr.press/v119/zheng20c.html}
+}
+
+```
+
+
+### GCE
+
+#### link: https://arxiv.org/abs/1805.07836
+
+```bash
+
+@misc{zhang2018generalized,
+      title={Generalized Cross Entropy Loss for Training Deep Neural Networks with Noisy Labels}, 
+      author={Zhilu Zhang and Mert R. Sabuncu},
+      year={2018},
+      eprint={1805.07836},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+
+```
+
+### ELR
+
+#### Link: https://arxiv.org/abs/2007.00151
+
+```bash
+
+@misc{liu2020earlylearning,
+   title={Early-Learning Regularization Prevents Memorization of Noisy Labels}, 
+      author={Sheng Liu and Jonathan Niles-Weed and Narges Razavian and Carlos Fernandez-Granda},
+      year={2020},
+      eprint={2007.00151},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+```
+
+
+### Noise Adaption
+
+#### Link: https://openreview.net/forum?id=H12GRgcxg
+
+```bash
+@inproceedings{
+goldberger2017training,
+title={Training deep neural-networks using a noise adaptation layer},
+author={Jacob Goldberger and Ehud Ben-Reuven},
+booktitle={International Conference on Learning Representations},
+year={2017},
+url={https://openreview.net/forum?id=H12GRgcxg}
+}
+```
+
+
+### LIO 
+
+#### Link: https://proceedings.mlr.press/v139/zhang21n.html
+
+```bash
+@InProceedings{pmlr-v139-zhang21n,
+  title = 	 {Learning Noise Transition Matrix from Only Noisy Labels via Total Variation Regularization},
+  author =       {Zhang, Yivan and Niu, Gang and Sugiyama, Masashi},
+  booktitle = 	 {Proceedings of the 38th International Conference on Machine Learning},
+  pages = 	 {12501--12512},
+  year = 	 {2021},
+  editor = 	 {Meila, Marina and Zhang, Tong},
+  volume = 	 {139},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {18--24 Jul},
+  publisher =    {PMLR},
+  pdf = 	 {http://proceedings.mlr.press/v139/zhang21n/zhang21n.pdf},
+  url = 	 {https://proceedings.mlr.press/v139/zhang21n.html}
+}
+
+
+```
+
+Additionally, if you utilize this adaptation for your research, please reference this repository and the dataset accordingly.
+
+
 ## Acknowledgments
 
-This project is inspired by various works in the field of machine learning and regularization techniques. Special thanks to the contributors and the community for their continuous support and inspiration.
-
----
+This project is inspired by the work of Xiani Wu et al., on "From Grim Reality to Practical Solution: Malware Classification in Real-World Noise" Our adaptation focuses on the specific challenges posed by the NIDS dom
