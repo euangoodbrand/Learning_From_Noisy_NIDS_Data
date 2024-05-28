@@ -486,9 +486,6 @@ def train(train_loader, model, optimizer, criterion, epoch, num_classes, smoothi
     for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
 
-        # Apply feature noise
-        data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
-
         # Apply label smoothing
         smoothed_labels = smooth_labels(labels, num_classes, smoothing)
 
@@ -514,6 +511,7 @@ def train(train_loader, model, optimizer, criterion, epoch, num_classes, smoothi
 
     train_acc = 100. * train_correct / train_total
     return train_acc
+
 
 
 def clean_class_name(class_name):
@@ -795,6 +793,9 @@ def main():
         print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
         print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
         print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
+
+        # Apply feature noise to the imbalanced data
+        X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
 
         # Introduce noise to the imbalanced data
         y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
