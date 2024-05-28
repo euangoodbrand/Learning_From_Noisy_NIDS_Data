@@ -15,9 +15,9 @@ do
   for model_type in mixup
   do
     # Experiment 1: Feature Noise (Additive)
-    for add_noise_level in "${feature_add_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python mixup.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level ${add_noise_level} --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
-    done
+    # for add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python mixup.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level ${add_noise_level} --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
+    # done
 
     # Experiment 2: Feature Noise (Multiplicative)
     for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
@@ -25,11 +25,11 @@ do
     done
 
     # Experiment 3: Feature Noise (Additive and Multiplicative)
-    for add_noise_level in "${feature_add_noise_levels[@]}"; do
-        for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python mixup.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_3$
-        done
-    done
+    # for add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #     for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python mixup.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_3$
+    #     done
+    # done
 
   done
 done

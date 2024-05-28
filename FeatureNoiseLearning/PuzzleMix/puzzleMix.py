@@ -21,7 +21,6 @@ from matplotlib.colors import LinearSegmentedColormap
 
 # Sklearn Import
 from sklearn.model_selection import StratifiedKFold
-from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
@@ -47,6 +46,10 @@ import torch.nn.init as init
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
+
+import pygco as gco
+
+
 
 for dirname, _, filenames in os.walk('/data'):
     for filename in filenames:
@@ -124,48 +127,82 @@ else:
     forget_rate = args.forget_rate
 
 
-def plot_decision_boundary(model, X, y, title, filename=None):
-    # Check if the data is 2D
-    if X.shape[1] != 2:
-        raise ValueError("Input data must be 2D to plot the decision boundary.")
+def mixup_graph(out, grad, indices, block_num=2, alpha=1.0, beta=0.1, gamma=0.1, eta=0.1, neigh_size=4, n_labels=2, mean=None, std=None, transport=True, t_eps=0.1, t_size=128, noise=None, adv_mask1=None, adv_mask2=None, mp=None, device='cuda'):
+    batch_size, num_classes = out.size()
+    lam = get_lambda(alpha)
+    
+    if mean is not None and std is not None:
+        mean = mean.to(device)
+        std = std.to(device)
+        out = (out - mean[None, :]) / std[None, :]
+    
+    unary1 = out.detach()
+    unary2 = grad.detach()
+    
+    # Ensure unary1 and unary2 have the same shape
+    if unary1.shape != unary2.shape:
+        print(f"Shape mismatch detected: unary1 shape: {unary1.shape}, unary2 shape: {unary2.shape}")
+        # This should not normally happen, as unary2 is derived from unary1.
+        # Adding a reshape to match shapes as a safeguard.
+        unary2 = unary2.view_as(unary1)
+        if unary1.shape != unary2.shape:
+            raise ValueError("Shape mismatch: unary1 and unary2 must have the same shape after adjustment")
 
-    # Create a mesh grid
-    h = .02  # step size in the mesh
-    x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-    y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-                         np.arange(y_min, y_max, h))
+    pw_x, pw_y = neigh_penalty(unary1, unary2, neigh_size)
 
-    # Flatten the grid to pass it to the model in smaller batches
-    grid = np.c_[xx.ravel(), yy.ravel()]
-    grid_tensor = torch.tensor(grid, dtype=torch.float32).cuda()
+    mask = graphcut_multi(unary1.cpu().numpy(), unary2.cpu().numpy(), pw_x.cpu().numpy(), pw_y.cpu().numpy(), lam, beta, eta, n_labels)
+    mask = torch.from_numpy(mask).float().to(device).reshape(batch_size, block_num, block_num)
+    
+    mixed_out = mask[:, None] * out + (1 - mask[:, None]) * out[indices]
+    
+    if mean is not None and std is not None:
+        mixed_out = mixed_out * std[None, :] + mean[None, :]
+    
+    return mixed_out, lam
 
-    # Process the grid in smaller chunks
-    batch_size = 10000
-    Z = []
-    model.eval()
-    with torch.no_grad():
-        for i in range(0, len(grid_tensor), batch_size):
-            grid_batch = grid_tensor[i:i + batch_size]
-            output_batch = model.forward_2d(grid_batch)
-            _, pred_batch = torch.max(output_batch, 1)
-            Z.append(pred_batch.cpu().numpy())
-
-    Z = np.concatenate(Z).reshape(xx.shape)
-
-    # Plot the decision boundary
-    plt.figure(figsize=(8, 6))
-    plt.contourf(xx, yy, Z, alpha=0.8, cmap=plt.cm.Spectral)
-    plt.scatter(X[:, 0], X[:, 1], c=y, edgecolor='k', s=20, cmap=plt.cm.Spectral)
-    plt.title(title)
-    plt.xlabel("Feature 1")
-    plt.ylabel("Feature 2")
-
-    if filename:
-        plt.savefig(filename)
+def get_lambda(alpha=1.0, alpha2=None):
+    if alpha > 0.:
+        if alpha2 is None:
+            lam = np.random.beta(alpha, alpha)
+        else:
+            lam = np.random.beta(alpha + 1e-2, alpha2 + 1e-2)
     else:
-        plt.show()
-    plt.close()
+        lam = 1.
+    return lam
+
+def mixup_box(input1, input2, alpha=0.5, device='cuda'):
+    batch_size, num_classes = input1.shape
+    ratio = np.zeros([batch_size])
+    return input1, torch.ones(batch_size, device=device) * alpha
+
+def neigh_penalty(input1, input2, k):
+    # Simplified penalty calculation for tensors with arbitrary dimensions
+    pw_x = input1 - input2
+    pw_y = input1 - input2
+    return pw_x, pw_y
+
+
+
+def graphcut_multi(unary1, unary2, pw_x, pw_y, alpha, beta, eta, n_labels=2, eps=1e-8):
+    block_num = unary1.shape[0]
+    large_val = 1000 * block_num**2
+    if n_labels == 2:
+        prior = np.array([-np.log(alpha + eps), -np.log(1 - alpha + eps)])
+    elif n_labels == 3:
+        prior = np.array([-np.log(alpha**2 + eps), -np.log(2 * alpha * (1 - alpha) + eps), -np.log((1 - alpha)**2 + eps)])
+    elif n_labels == 4:
+        prior = np.array([-np.log(alpha**3 + eps), -np.log(3 * alpha**2 * (1 - alpha) + eps), -np.log(3 * alpha * (1 - alpha)**2 + eps), -np.log((1 - alpha)**3 + eps)])
+    prior = eta * prior / block_num**2
+    unary_cost = (large_val * np.stack([(1 - lam) * unary1 + lam * unary2 + prior[i] for i, lam in enumerate(np.linspace(0, 1, n_labels))], axis=-1)).astype(np.int32)
+    pairwise_cost = np.zeros(shape=[n_labels, n_labels], dtype=np.float32)
+    for i in range(n_labels):
+        for j in range(n_labels):
+            pairwise_cost[i, j] = (i - j)**2 / (n_labels - 1)**2
+    pw_x = (large_val * (pw_x + beta)).astype(np.int32)
+    pw_y = (large_val * (pw_y + beta)).astype(np.int32)
+    labels = 1.0 - gco.cut_grid_graph(unary_cost, pairwise_cost, pw_x, pw_y, algorithm='swap') / (n_labels - 1)
+    mask = labels.reshape(block_num, block_num)
+    return mask
 
 def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
     device = x.device
@@ -206,7 +243,6 @@ def introduce_noise(labels, features, label_noise_type, label_noise_rate):
         return introduce_mimicry_noise(labels, predefined_matrix, label_noise_rate)
     else:
         raise ValueError("Invalid noise type specified.")
-
 
 def apply_data_augmentation(features, labels, augmentation_method):
     try:
@@ -513,46 +549,32 @@ def accuracy(logit, target, topk=(1,)):
     return res
 
 
-def mixup_data(x, y, alpha=1.0):
-    '''Returns mixed inputs, pairs of targets, and lambda'''
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
-
-    batch_size = x.size()[0]
-    index = torch.randperm(batch_size).cuda()
-
-    mixed_x = lam * x + (1 - lam) * x[index, :]
-    y_a, y_b = y, y[index]
-    return mixed_x, y_a, y_b, lam
-
-def mixup_criterion(criterion, pred, y_a, y_b, lam):
-    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+def one_hot_encode(labels, num_classes):
+    return torch.eye(num_classes, device=labels.device)[labels]
 
 # Apply the noise function in the training loop and print results
-def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_mixup=False, mixup_alpha=1.0):
-    model.train()  # Set model to training mode
+def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
+    model.train()
     train_total = 0
     train_correct = 0
     total_loss = 0
 
     for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
+        data.requires_grad = True  # Ensure the input tensor requires gradients
 
-        # Apply Mixup if enabled
-        if use_mixup:
-            data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
-            data, targets_a, targets_b, lam = mixup_data(data, labels, mixup_alpha)
-            outputs = model(data)
-            loss = mixup_criterion(criterion, outputs, targets_a, targets_b, lam)
-        else:
-            # Apply feature noise
-            data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
-            outputs = model(data)
-            loss = criterion(outputs, labels)
+        # Apply PuzzleMix
+        out = model(data)
+        grad = torch.autograd.grad(out.sum(), data, create_graph=True)[0]  # Use .sum() to get scalar for grad computation
+        
+        data, lam = mixup_graph(out, grad, torch.randperm(data.size(0)), alpha=1.0, beta=0.1, gamma=0.1, eta=0.1)
 
-        # Apply weights manually if weight resampling is enabled
+        logits = model(data)
+        labels_one_hot = one_hot_encode(labels, no_of_classes)
+        log_logits = F.log_softmax(logits, dim=1)
+        
+        loss = criterion(log_logits, labels_one_hot)
+
         if args.weight_resampling != 'none':
             weights = compute_weights(labels, no_of_classes=no_of_classes)
             loss = (loss * weights).mean()
@@ -561,7 +583,7 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_m
         loss.backward()
         optimizer.step()
 
-        _, predicted = torch.max(outputs.data, 1)
+        _, predicted = torch.max(logits.data, 1)
         train_total += labels.size(0)
         train_correct += (predicted == labels).sum().item()
         total_loss += loss.item()
@@ -571,7 +593,6 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_m
 
     train_acc = 100. * train_correct / train_total
     return train_acc
-
 
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
@@ -753,6 +774,7 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 
+
 def main():
     print(model_str)
     label_encoder = LabelEncoder()
@@ -771,6 +793,7 @@ def main():
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
         features_np = handle_inf_nan(features_np)
 
+        # Splitting the data into training, test, and a clean test set
         X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
         X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
@@ -793,10 +816,15 @@ def main():
             X_test, y_test = data['X_test'], data['y_test']
         y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
+
+        # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
+    # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
+
+    # Define the base filename with weight resampling status
     resampling_status = 'weight_resampling' if args.weight_resampling != 'none' else 'no_weight_resampling'
     label_noise_str = f"{args.label_noise_type}-label-noise{args.label_noise_rate}_" if args.label_noise_rate > 0 else ""
     if args.weight_resampling:
@@ -804,9 +832,11 @@ def main():
     else:
         base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{resampling_status}_{label_noise_str}add-noise{args.feature_add_noise_level}_mult-noise{args.feature_mult_noise_level}_imbalance{args.imbalance_ratio}"
 
+    # File paths for CSV and model files
     full_dataset_metrics_file = os.path.join(results_dir, f"{base_filename}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
 
+    # Prepare CSV file for validation metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
             fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
@@ -823,76 +853,90 @@ def main():
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
+    # Initialize dictionaries to store the sum of metrics for averaging
     metrics_sum = {key: 0 for key in fieldnames if key not in ['Fold', 'Epoch']}
 
-    for run in range(3):
+    # Run the training and evaluation three times
+    n_runs = 3
+    for run in range(n_runs):
         print(f"Run {run + 1}/3")
-
+        
+        # Print the original dataset sizes and class distribution
         print("Original dataset:")
         print(f"Length of X_train: {len(X_train)}")
         print(f"Length of y_train: {len(y_train)}")
         print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
 
+        # Apply imbalance to the training dataset
         X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
 
+        # Print class distribution after applying imbalance
         print("Before introducing noise:")
         print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
         print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
         print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
 
+        # Introduce noise to the imbalanced data
         y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
 
+        # Print class distribution after introducing noise
         print("Before augmentation:")
         print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
         print(f"Length of y_train__label_noisy: {len(y_train__label_noisy)}")
         print(f"Length of label_noise_or_not: {len(label_noise_or_not)}")
         print("Class distribution after introducing noise:", {label: np.sum(y_train__label_noisy == label) for label in np.unique(y_train__label_noisy)})
 
+        # Apply data augmentation to the noisy data
         X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train__label_noisy, args.data_augmentation)
 
         if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
-            label_noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
+            # Recalculate label_noise_or_not to match the augmented data size
+            label_noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the label_noise_or_not array size and values as needed
 
+        # Print class distribution after data augmentation
         print("After augmentation:")
         print(f"Length of X_train_augmented: {len(X_train_augmented)}")
         print(f"Length of y_train_augmented: {len(y_train_augmented)}")
         print(f"Length of label_noise_or_not (adjusted if necessary): {len(label_noise_or_not)}")
         print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
+        # Prepare the full augmented dataset for training
         full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, label_noise_or_not)
         full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
+        # Prepare the full model
         full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
         full_model.apply(weights_init)
         full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
-        full_criterion = CrossEntropyLoss()
+        full_criterion = nn.KLDivLoss(reduction='batchmean')  # Label smoothing criterion as label smoothing produces prop distributions
 
+        # Train on the full augmented dataset
         print("Training on the full augmented dataset...")
         for epoch in range(args.n_epoch):
-            train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)), use_mixup=True, mixup_alpha=1.0)
+            train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
 
+        # Prepare clean data for evaluation
         clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
         clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
+        # Evaluate the full model on clean dataset and save predictions
         print("Evaluating on clean dataset...")
-        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=(run == 0))
+        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=(run == 0))  # Save confusion matrix only for the first run
 
+        # Add the current run's metrics to the metrics_sum
         for key in metrics_sum.keys():
             metrics_sum[key] += full_metrics[key]
 
-    metrics_avg = {key: value / 3 for key, value in metrics_sum.items()}
+    # Calculate the average metrics
+    metrics_avg = {key: value / n_runs for key, value in metrics_sum.items()}
 
+    # Save the average metrics to the CSV file
     row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', 'Average')] + list(metrics_avg.items()))
     with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerow(row_data)
 
     print("Final evaluation completed. Average metrics saved.")
-
-    # Generate decision boundary plot for the final model if the data is 2D
-    if X_train_augmented.shape[1] == 2:
-        decision_boundary_filename = os.path.join(results_dir, f"{base_filename}_decision_boundary.png")
-        plot_decision_boundary(full_model, X_train_augmented, y_train_augmented, title='Decision Boundary - Final Model', filename=decision_boundary_filename)
 
 if __name__ == '__main__':
     main()

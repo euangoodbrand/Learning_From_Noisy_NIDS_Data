@@ -21,7 +21,6 @@ from matplotlib.colors import LinearSegmentedColormap
 
 # Sklearn Import
 from sklearn.model_selection import StratifiedKFold
-from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
@@ -81,7 +80,18 @@ parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'F
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
 
+# Add arguments for noisy mixup
+parser.add_argument('--mixup_alpha', type=float, default=0.2, help='Alpha value for mixup')
+parser.add_argument('--mixup_jsd', type=int, default=0, help='Use JSD for noisy mixup')
+parser.add_argument('--mixup_add_noise_level', type=float, default=0.0, help='Additive noise level for mixup')
+parser.add_argument('--mixup_mult_noise_level', type=float, default=0.0, help='Multiplicative noise level for mixup')
+parser.add_argument('--mixup_sparse_level', type=float, default=0.0, help='Sparsity level for mixup')
+
+# Add missing argument for manifold mixup
+parser.add_argument('--manifold_mixup', type=float, default=0.0, help='Manifold mixup parameter')
+
 args = parser.parse_args()
+
 
 # Seed
 torch.manual_seed(args.seed)
@@ -123,49 +133,6 @@ if args.forget_rate is None:
 else:
     forget_rate = args.forget_rate
 
-
-def plot_decision_boundary(model, X, y, title, filename=None):
-    # Check if the data is 2D
-    if X.shape[1] != 2:
-        raise ValueError("Input data must be 2D to plot the decision boundary.")
-
-    # Create a mesh grid
-    h = .02  # step size in the mesh
-    x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-    y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-                         np.arange(y_min, y_max, h))
-
-    # Flatten the grid to pass it to the model in smaller batches
-    grid = np.c_[xx.ravel(), yy.ravel()]
-    grid_tensor = torch.tensor(grid, dtype=torch.float32).cuda()
-
-    # Process the grid in smaller chunks
-    batch_size = 10000
-    Z = []
-    model.eval()
-    with torch.no_grad():
-        for i in range(0, len(grid_tensor), batch_size):
-            grid_batch = grid_tensor[i:i + batch_size]
-            output_batch = model.forward_2d(grid_batch)
-            _, pred_batch = torch.max(output_batch, 1)
-            Z.append(pred_batch.cpu().numpy())
-
-    Z = np.concatenate(Z).reshape(xx.shape)
-
-    # Plot the decision boundary
-    plt.figure(figsize=(8, 6))
-    plt.contourf(xx, yy, Z, alpha=0.8, cmap=plt.cm.Spectral)
-    plt.scatter(X[:, 0], X[:, 1], c=y, edgecolor='k', s=20, cmap=plt.cm.Spectral)
-    plt.title(title)
-    plt.xlabel("Feature 1")
-    plt.ylabel("Feature 2")
-
-    if filename:
-        plt.savefig(filename)
-    else:
-        plt.show()
-    plt.close()
 
 def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
     device = x.device
@@ -513,57 +480,84 @@ def accuracy(logit, target, topk=(1,)):
     return res
 
 
-def mixup_data(x, y, alpha=1.0):
-    '''Returns mixed inputs, pairs of targets, and lambda'''
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
+def one_hot_encode(labels, num_classes):
+    return torch.eye(num_classes, device=labels.device)[labels]
 
-    batch_size = x.size()[0]
-    index = torch.randperm(batch_size).cuda()
-
-    mixed_x = lam * x + (1 - lam) * x[index, :]
-    y_a, y_b = y, y[index]
-    return mixed_x, y_a, y_b, lam
 
 def mixup_criterion(criterion, pred, y_a, y_b, lam):
     return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 # Apply the noise function in the training loop and print results
-def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_mixup=False, mixup_alpha=1.0):
-    model.train()  # Set model to training mode
+def train(net, train_loader, optimizer, scheduler, epoch):
+    net.train()
+    loss_ema = 0.
     train_total = 0
     train_correct = 0
     total_loss = 0
 
-    for i, (data, labels, _) in enumerate(train_loader):
-        data, labels = data.cuda(), labels.cuda()
+    criterion = torch.nn.CrossEntropyLoss().cuda()
 
-        # Apply Mixup if enabled
-        if use_mixup:
-            data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
-            data, targets_a, targets_b, lam = mixup_data(data, labels, mixup_alpha)
-            outputs = model(data)
-            loss = mixup_criterion(criterion, outputs, targets_a, targets_b, lam)
-        else:
-            # Apply feature noise
-            data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
-            outputs = model(data)
-            loss = criterion(outputs, labels)
-
-        # Apply weights manually if weight resampling is enabled
-        if args.weight_resampling != 'none':
-            weights = compute_weights(labels, no_of_classes=no_of_classes)
-            loss = (loss * weights).mean()
-
+    for i, (images, targets, _) in enumerate(train_loader):
         optimizer.zero_grad()
+
+        # Apply feature noise
+        images = feature_noise(images, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
+
+        if args.mixup_jsd == 0:
+            images = images.cuda()
+            targets = targets.cuda()
+
+            if args.mixup_alpha == 0.0:
+                outputs = net(images)
+            else:
+                outputs, targets_a, targets_b, lam = net(images, targets=targets, jsd=args.mixup_jsd,
+                                                         mixup_alpha=args.mixup_alpha,
+                                                         manifold_mixup=args.manifold_mixup,
+                                                         add_noise_level=args.mixup_add_noise_level,
+                                                         mult_noise_level=args.mixup_mult_noise_level,
+                                                         sparse_level=args.mixup_sparse_level)
+
+            if args.mixup_alpha > 0:
+                loss = mixup_criterion(criterion, outputs, targets_a, targets_b, lam)
+            else:
+                loss = criterion(outputs, targets)
+
+        elif args.mixup_jsd == 1:
+            images_all = torch.cat(images, 0).cuda()
+            targets = targets.cuda()
+
+            if args.mixup_alpha == 0.0:
+                logits_all = net(images_all)
+            else:
+                logits_all, targets_a, targets_b, lam = net(images_all, targets=targets, jsd=args.mixup_jsd,
+                                                            mixup_alpha=args.mixup_alpha,
+                                                            manifold_mixup=args.manifold_mixup,
+                                                            add_noise_level=args.mixup_add_noise_level,
+                                                            mult_noise_level=args.mixup_mult_noise_level,
+                                                            sparse_level=args.mixup_sparse_level)
+
+            if args.mixup_alpha > 0:
+                logits_clean, logits_aug1, logits_aug2 = torch.split(logits_all, images[0].size(0))
+                loss = mixup_criterion(criterion, logits_clean, targets_a, targets_b, lam)
+            else:
+                logits_clean, logits_aug1, logits_aug2 = torch.split(logits_all, images[0].size(0))
+                loss = criterion(logits_clean, targets)
+
+            # JSD Loss
+            p_clean, p_aug1, p_aug2 = F.softmax(logits_clean, dim=1), F.softmax(logits_aug1, dim=1), F.softmax(logits_aug2, dim=1)
+            p_mixture = torch.clamp((p_clean + p_aug1 + p_aug2) / 3., 1e-7, 1).log()
+            loss += 12 * (F.kl_div(p_mixture, p_clean, reduction='batchmean') +
+                          F.kl_div(p_mixture, p_aug1, reduction='batchmean') +
+                          F.kl_div(p_mixture, p_aug2, reduction='batchmean')) / 3.
+
         loss.backward()
         optimizer.step()
+        scheduler.step()
+        loss_ema = loss_ema * 0.9 + float(loss) * 0.1
 
         _, predicted = torch.max(outputs.data, 1)
-        train_total += labels.size(0)
-        train_correct += (predicted == labels).sum().item()
+        train_total += targets.size(0)
+        train_correct += (predicted == targets).sum().item()
         total_loss += loss.item()
 
     print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
@@ -571,6 +565,7 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_m
 
     train_acc = 100. * train_correct / train_total
     return train_acc
+
 
 
 def clean_class_name(class_name):
@@ -753,6 +748,51 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 
+def do_noisy_mixup(x, y, num_classes, jsd=0, alpha=0.0, add_noise_level=0.0, mult_noise_level=0.0, sparse_level=0.0):
+    lam = np.random.beta(alpha, alpha) if alpha > 0.0 else 1.0
+    
+    if jsd == 0:
+        index = torch.randperm(x.size()[0]).cuda()
+        x = lam * x + (1 - lam) * x[index]
+        x = _noise(x, add_noise_level=add_noise_level, mult_noise_level=mult_noise_level, sparse_level=sparse_level)
+        y_a = F.one_hot(y, num_classes).float()
+        y_b = F.one_hot(y[index], num_classes).float()
+    else:
+        kk = 0
+        q = int(x.shape[0] / 3)
+        index = torch.randperm(q).cuda()
+        for i in range(1, 4):
+            x[kk:kk + q] = lam * x[kk:kk + q] + (1 - lam) * x[kk:kk + q][index]
+            x[kk:kk + q] = _noise(x[kk:kk + q], add_noise_level=add_noise_level * i, mult_noise_level=mult_noise_level, sparse_level=sparse_level)
+            kk += q
+        y_a = F.one_hot(y, num_classes).float()
+        y_b = F.one_hot(y[index], num_classes).float()
+    
+    return x, y_a, y_b, lam
+
+
+def _noise(x, add_noise_level=0.0, mult_noise_level=0.0, sparse_level=0.0):
+    add_noise = 0.0
+    mult_noise = 1.0
+    with torch.cuda.device(0):
+        if add_noise_level > 0.0:
+            var = torch.var(x)**0.5
+            add_noise = add_noise_level * np.random.beta(2, 5) * torch.cuda.FloatTensor(x.shape).normal_()
+            #torch.clamp(add_noise, min=-(2*var), max=(2*var), out=add_noise) # clamp
+            sparse = torch.cuda.FloatTensor(x.shape).uniform_()
+            add_noise[sparse<sparse_level] = 0
+        if mult_noise_level > 0.0:
+            mult_noise = mult_noise_level * np.random.beta(2, 5) * (2*torch.cuda.FloatTensor(x.shape).uniform_()-1) + 1 
+            sparse = torch.cuda.FloatTensor(x.shape).uniform_()
+            mult_noise[sparse<sparse_level] = 1.0
+
+            
+    return mult_noise * x + add_noise      
+
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
+    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+
+
 def main():
     print(model_str)
     label_encoder = LabelEncoder()
@@ -771,6 +811,7 @@ def main():
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
         features_np = handle_inf_nan(features_np)
 
+        # Splitting the data into training, test, and a clean test set
         X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
         X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
@@ -793,10 +834,18 @@ def main():
             X_test, y_test = data['X_test'], data['y_test']
         y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
+
+        # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
+    # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
+
+    # Define the base filename with weight resampling status
+    results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
+    os.makedirs(results_dir, exist_ok=True)
+
     resampling_status = 'weight_resampling' if args.weight_resampling != 'none' else 'no_weight_resampling'
     label_noise_str = f"{args.label_noise_type}-label-noise{args.label_noise_rate}_" if args.label_noise_rate > 0 else ""
     if args.weight_resampling:
@@ -825,39 +874,21 @@ def main():
 
     metrics_sum = {key: 0 for key in fieldnames if key not in ['Fold', 'Epoch']}
 
-    for run in range(3):
+    n_runs = 3
+    for run in range(n_runs):
         print(f"Run {run + 1}/3")
-
-        print("Original dataset:")
-        print(f"Length of X_train: {len(X_train)}")
-        print(f"Length of y_train: {len(y_train)}")
-        print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
-
+        
+        # Apply imbalance to the training dataset
         X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
 
-        print("Before introducing noise:")
-        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-        print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
-        print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
-
+        # Introduce noise to the imbalanced data
         y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
 
-        print("Before augmentation:")
-        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-        print(f"Length of y_train__label_noisy: {len(y_train__label_noisy)}")
-        print(f"Length of label_noise_or_not: {len(label_noise_or_not)}")
-        print("Class distribution after introducing noise:", {label: np.sum(y_train__label_noisy == label) for label in np.unique(y_train__label_noisy)})
-
+        # Apply data augmentation to the noisy data
         X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train__label_noisy, args.data_augmentation)
 
         if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
             label_noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
-
-        print("After augmentation:")
-        print(f"Length of X_train_augmented: {len(X_train_augmented)}")
-        print(f"Length of y_train_augmented: {len(y_train_augmented)}")
-        print(f"Length of label_noise_or_not (adjusted if necessary): {len(label_noise_or_not)}")
-        print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
         full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, label_noise_or_not)
         full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
@@ -865,11 +896,11 @@ def main():
         full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
         full_model.apply(weights_init)
         full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
-        full_criterion = CrossEntropyLoss()
+        full_scheduler = optim.lr_scheduler.StepLR(full_optimizer, step_size=25, gamma=0.99)
 
         print("Training on the full augmented dataset...")
         for epoch in range(args.n_epoch):
-            train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)), use_mixup=True, mixup_alpha=1.0)
+            train(full_model, full_train_loader, full_optimizer, full_scheduler, epoch)
 
         clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
         clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
@@ -880,7 +911,7 @@ def main():
         for key in metrics_sum.keys():
             metrics_sum[key] += full_metrics[key]
 
-    metrics_avg = {key: value / 3 for key, value in metrics_sum.items()}
+    metrics_avg = {key: value / n_runs for key, value in metrics_sum.items()}
 
     row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', 'Average')] + list(metrics_avg.items()))
     with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
@@ -888,11 +919,6 @@ def main():
         writer.writerow(row_data)
 
     print("Final evaluation completed. Average metrics saved.")
-
-    # Generate decision boundary plot for the final model if the data is 2D
-    if X_train_augmented.shape[1] == 2:
-        decision_boundary_filename = os.path.join(results_dir, f"{base_filename}_decision_boundary.png")
-        plot_decision_boundary(full_model, X_train_augmented, y_train_augmented, title='Decision Boundary - Final Model', filename=decision_boundary_filename)
 
 if __name__ == '__main__':
     main()

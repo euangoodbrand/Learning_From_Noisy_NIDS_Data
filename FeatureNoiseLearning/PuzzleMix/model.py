@@ -30,14 +30,6 @@ class MLPNet(nn.Module):
         x = F.relu(self.fc3(x))
         x = self.fc4(x)
         return x
-    
-    def forward_2d(self, x):
-        # Create a new input layer to handle 2D input for decision boundary
-        fc1_2d = nn.Linear(2, 128).to(x.device)
-        x = F.relu(fc1_2d(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
 
     def _initialize_weights(self):
         # Initialize weights and biases for all fully connected layers

@@ -500,6 +500,7 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_m
     for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
         if use_mixup:
+            data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
             hook, lam = manifold_mixup(data, labels, model, mixup_alpha)
             logits = model(data)
             hook.remove()

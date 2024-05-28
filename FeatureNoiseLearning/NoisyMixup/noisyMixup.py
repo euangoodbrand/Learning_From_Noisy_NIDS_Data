@@ -21,7 +21,6 @@ from matplotlib.colors import LinearSegmentedColormap
 
 # Sklearn Import
 from sklearn.model_selection import StratifiedKFold
-from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
@@ -65,7 +64,7 @@ parser.add_argument('--forget_rate', type=float, help='forget rate', default=Non
 parser.add_argument('--label_noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=200)
+parser.add_argument('--n_epoch', type=int, default=50)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=10)
@@ -123,49 +122,6 @@ if args.forget_rate is None:
 else:
     forget_rate = args.forget_rate
 
-
-def plot_decision_boundary(model, X, y, title, filename=None):
-    # Check if the data is 2D
-    if X.shape[1] != 2:
-        raise ValueError("Input data must be 2D to plot the decision boundary.")
-
-    # Create a mesh grid
-    h = .02  # step size in the mesh
-    x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-    y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-                         np.arange(y_min, y_max, h))
-
-    # Flatten the grid to pass it to the model in smaller batches
-    grid = np.c_[xx.ravel(), yy.ravel()]
-    grid_tensor = torch.tensor(grid, dtype=torch.float32).cuda()
-
-    # Process the grid in smaller chunks
-    batch_size = 10000
-    Z = []
-    model.eval()
-    with torch.no_grad():
-        for i in range(0, len(grid_tensor), batch_size):
-            grid_batch = grid_tensor[i:i + batch_size]
-            output_batch = model.forward_2d(grid_batch)
-            _, pred_batch = torch.max(output_batch, 1)
-            Z.append(pred_batch.cpu().numpy())
-
-    Z = np.concatenate(Z).reshape(xx.shape)
-
-    # Plot the decision boundary
-    plt.figure(figsize=(8, 6))
-    plt.contourf(xx, yy, Z, alpha=0.8, cmap=plt.cm.Spectral)
-    plt.scatter(X[:, 0], X[:, 1], c=y, edgecolor='k', s=20, cmap=plt.cm.Spectral)
-    plt.title(title)
-    plt.xlabel("Feature 1")
-    plt.ylabel("Feature 2")
-
-    if filename:
-        plt.savefig(filename)
-    else:
-        plt.show()
-    plt.close()
 
 def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
     device = x.device
@@ -513,25 +469,11 @@ def accuracy(logit, target, topk=(1,)):
     return res
 
 
-def mixup_data(x, y, alpha=1.0):
-    '''Returns mixed inputs, pairs of targets, and lambda'''
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
-
-    batch_size = x.size()[0]
-    index = torch.randperm(batch_size).cuda()
-
-    mixed_x = lam * x + (1 - lam) * x[index, :]
-    y_a, y_b = y, y[index]
-    return mixed_x, y_a, y_b, lam
-
-def mixup_criterion(criterion, pred, y_a, y_b, lam):
-    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+def one_hot_encode(labels, num_classes):
+    return torch.eye(num_classes, device=labels.device)[labels]
 
 # Apply the noise function in the training loop and print results
-def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_mixup=False, mixup_alpha=1.0):
+def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
     model.train()  # Set model to training mode
     train_total = 0
     train_correct = 0
@@ -540,17 +482,17 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_m
     for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
 
-        # Apply Mixup if enabled
-        if use_mixup:
-            data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
-            data, targets_a, targets_b, lam = mixup_data(data, labels, mixup_alpha)
-            outputs = model(data)
-            loss = mixup_criterion(criterion, outputs, targets_a, targets_b, lam)
-        else:
-            # Apply feature noise
-            data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
-            outputs = model(data)
-            loss = criterion(outputs, labels)
+        # Apply feature noise
+        data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
+
+        # Forward pass
+        logits = model(data)
+        
+        # One-hot encode labels and convert logits to log probabilities
+        labels_one_hot = one_hot_encode(labels, no_of_classes)
+        log_logits = F.log_softmax(logits, dim=1)
+        
+        loss = criterion(log_logits, labels_one_hot)
 
         # Apply weights manually if weight resampling is enabled
         if args.weight_resampling != 'none':
@@ -561,7 +503,7 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_m
         loss.backward()
         optimizer.step()
 
-        _, predicted = torch.max(outputs.data, 1)
+        _, predicted = torch.max(logits.data, 1)
         train_total += labels.size(0)
         train_correct += (predicted == labels).sum().item()
         total_loss += loss.item()
@@ -571,7 +513,6 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes, use_m
 
     train_acc = 100. * train_correct / train_total
     return train_acc
-
 
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
@@ -753,6 +694,7 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 
+
 def main():
     print(model_str)
     label_encoder = LabelEncoder()
@@ -771,6 +713,7 @@ def main():
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
         features_np = handle_inf_nan(features_np)
 
+        # Splitting the data into training, test, and a clean test set
         X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
         X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
@@ -793,10 +736,15 @@ def main():
             X_test, y_test = data['X_test'], data['y_test']
         y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
+
+        # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
+    # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
+
+    # Define the base filename with weight resampling status
     resampling_status = 'weight_resampling' if args.weight_resampling != 'none' else 'no_weight_resampling'
     label_noise_str = f"{args.label_noise_type}-label-noise{args.label_noise_rate}_" if args.label_noise_rate > 0 else ""
     if args.weight_resampling:
@@ -804,9 +752,11 @@ def main():
     else:
         base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{resampling_status}_{label_noise_str}add-noise{args.feature_add_noise_level}_mult-noise{args.feature_mult_noise_level}_imbalance{args.imbalance_ratio}"
 
+    # File paths for CSV and model files
     full_dataset_metrics_file = os.path.join(results_dir, f"{base_filename}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
 
+    # Prepare CSV file for validation metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
             fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
@@ -823,76 +773,90 @@ def main():
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
+    # Initialize dictionaries to store the sum of metrics for averaging
     metrics_sum = {key: 0 for key in fieldnames if key not in ['Fold', 'Epoch']}
 
-    for run in range(3):
+    # Run the training and evaluation three times
+    n_runs = 3
+    for run in range(n_runs):
         print(f"Run {run + 1}/3")
-
+        
+        # Print the original dataset sizes and class distribution
         print("Original dataset:")
         print(f"Length of X_train: {len(X_train)}")
         print(f"Length of y_train: {len(y_train)}")
         print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
 
+        # Apply imbalance to the training dataset
         X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
 
+        # Print class distribution after applying imbalance
         print("Before introducing noise:")
         print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
         print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
         print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
 
+        # Introduce noise to the imbalanced data
         y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
 
+        # Print class distribution after introducing noise
         print("Before augmentation:")
         print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
         print(f"Length of y_train__label_noisy: {len(y_train__label_noisy)}")
         print(f"Length of label_noise_or_not: {len(label_noise_or_not)}")
         print("Class distribution after introducing noise:", {label: np.sum(y_train__label_noisy == label) for label in np.unique(y_train__label_noisy)})
 
+        # Apply data augmentation to the noisy data
         X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train__label_noisy, args.data_augmentation)
 
         if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
-            label_noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
+            # Recalculate label_noise_or_not to match the augmented data size
+            label_noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the label_noise_or_not array size and values as needed
 
+        # Print class distribution after data augmentation
         print("After augmentation:")
         print(f"Length of X_train_augmented: {len(X_train_augmented)}")
         print(f"Length of y_train_augmented: {len(y_train_augmented)}")
         print(f"Length of label_noise_or_not (adjusted if necessary): {len(label_noise_or_not)}")
         print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
+        # Prepare the full augmented dataset for training
         full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, label_noise_or_not)
         full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
+        # Prepare the full model
         full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
         full_model.apply(weights_init)
         full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
-        full_criterion = CrossEntropyLoss()
+        full_criterion = nn.KLDivLoss(reduction='batchmean')  # Label smoothing criterion as label smoothing produces prop distributions
 
+        # Train on the full augmented dataset
         print("Training on the full augmented dataset...")
         for epoch in range(args.n_epoch):
-            train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)), use_mixup=True, mixup_alpha=1.0)
+            train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
 
+        # Prepare clean data for evaluation
         clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
         clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
+        # Evaluate the full model on clean dataset and save predictions
         print("Evaluating on clean dataset...")
-        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=(run == 0))
+        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=(run == 0))  # Save confusion matrix only for the first run
 
+        # Add the current run's metrics to the metrics_sum
         for key in metrics_sum.keys():
             metrics_sum[key] += full_metrics[key]
 
-    metrics_avg = {key: value / 3 for key, value in metrics_sum.items()}
+    # Calculate the average metrics
+    metrics_avg = {key: value / n_runs for key, value in metrics_sum.items()}
 
+    # Save the average metrics to the CSV file
     row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', 'Average')] + list(metrics_avg.items()))
     with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerow(row_data)
 
     print("Final evaluation completed. Average metrics saved.")
-
-    # Generate decision boundary plot for the final model if the data is 2D
-    if X_train_augmented.shape[1] == 2:
-        decision_boundary_filename = os.path.join(results_dir, f"{base_filename}_decision_boundary.png")
-        plot_decision_boundary(full_model, X_train_augmented, y_train_augmented, title='Decision Boundary - Final Model', filename=decision_boundary_filename)
 
 if __name__ == '__main__':
     main()
