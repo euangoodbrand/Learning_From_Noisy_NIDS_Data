@@ -64,7 +64,7 @@ parser.add_argument('--forget_rate', type=float, help='forget rate', default=Non
 parser.add_argument('--label_noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=50)
+parser.add_argument('--n_epoch', type=int, default=200)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=10)
@@ -472,7 +472,6 @@ def accuracy(logit, target, topk=(1,)):
 def one_hot_encode(labels, num_classes):
     return torch.eye(num_classes, device=labels.device)[labels]
 
-# Apply the noise function in the training loop and print results
 def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
     model.train()  # Set model to training mode
     train_total = 0
@@ -481,9 +480,6 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
 
     for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
-
-        # Apply feature noise
-        data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
 
         # Forward pass
         logits = model(data)
@@ -799,6 +795,9 @@ def main():
         # Introduce noise to the imbalanced data
         y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
 
+        # Apply feature noise
+        X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+
         # Print class distribution after introducing noise
         print("Before augmentation:")
         print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
@@ -828,7 +827,7 @@ def main():
         full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
         full_model.apply(weights_init)
         full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
-        full_criterion = nn.KLDivLoss(reduction='batchmean')  # Label smoothing criterion as label smoothing produces prop distributions
+        full_criterion = CrossEntropyLoss()
 
         # Train on the full augmented dataset
         print("Training on the full augmented dataset...")
