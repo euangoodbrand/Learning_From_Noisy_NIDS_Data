@@ -469,7 +469,10 @@ def accuracy(logit, target, topk=(1,)):
     return res
 
 
-# Apply the noise function in the training loop and print results
+def noise_injection(data, noise_level=0.1):
+    noise = noise_level * torch.randn_like(data)
+    return data + noise
+
 def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
     model.train()  # Set model to training mode
     train_total = 0
@@ -479,8 +482,8 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
     for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
 
-        # Apply feature noise
-        data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
+        # Inject noise into the training data
+        data = noise_injection(data, noise_level=0.1)
 
         logits = model(data)
         loss = criterion(logits, labels)
@@ -770,6 +773,10 @@ def main():
         print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
 
         X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+
+        # Apply feature noise to the imbalanced data
+        X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+
 
         print("Before introducing noise:")
         print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
