@@ -64,7 +64,7 @@ parser.add_argument('--forget_rate', type=float, help='forget rate', default=Non
 parser.add_argument('--label_noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
-parser.add_argument('--n_epoch', type=int, default=200)
+parser.add_argument('--n_epoch', type=int, default=500)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--print_freq', type=int, default=10)
@@ -82,7 +82,7 @@ parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help=
 
 args = parser.parse_args()
 
-# Seed
+# Seed 
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 
@@ -481,9 +481,6 @@ def train(train_loader, model, optimizer, criterion, epoch, num_classes):
     for i, (data, labels, _) in enumerate(train_loader):
         data, labels = data.cuda(), labels.cuda()
 
-        # Apply feature noise
-        data = feature_noise(data, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
-
         # Forward pass
         logits = model(data)
         
@@ -798,6 +795,9 @@ def main():
 
         # Introduce noise to the imbalanced data
         y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
+
+        # Apply feature noise
+        X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
 
         # Print class distribution after introducing noise
         print("Before augmentation:")
