@@ -25,7 +25,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
-from sklearn.decomposition import PCA
 from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 )
@@ -76,11 +75,12 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
+parser.add_argument('--max_norm', type=float, default=3.0, help='Max norm for weights')  # Add max norm argument
+
 
 # Add new arguments for feature noise parameters
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
-parser.add_argument('--pca_components', type=int, default=30, help='Number of PCA components to keep')
 
 args = parser.parse_args()
 
@@ -123,6 +123,15 @@ if args.forget_rate is None:
     forget_rate = args.label_noise_rate
 else:
     forget_rate = args.forget_rate
+
+
+def apply_max_norm(model, max_norm):
+    with torch.no_grad():
+        for param in model.parameters():
+            if param.requires_grad:
+                param.clamp_(-max_norm, max_norm)
+
+
 
 
 def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
@@ -501,6 +510,9 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
         loss.backward()
         optimizer.step()
 
+        # Apply max-norm regularization
+        apply_max_norm(model, args.max_norm)
+
         _, predicted = torch.max(logits.data, 1)
         train_total += labels.size(0)
         train_correct += (predicted == labels).sum().item()
@@ -511,6 +523,7 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
 
     train_acc = 100. * train_correct / train_total
     return train_acc
+
 
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
@@ -691,11 +704,7 @@ def handle_inf_nan(features_np):
     scaler = StandardScaler()
     return scaler.fit_transform(features_np)
 
-def apply_pca(features, n_components=30):
-    pca = PCA(n_components=n_components)
-    features_pca = pca.fit_transform(features)
-    print(f"Explained variance ratio by PCA: {np.sum(pca.explained_variance_ratio_)}")
-    return features_pca
+
 
 def main():
     print(model_str)
@@ -715,12 +724,6 @@ def main():
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
         features_np = handle_inf_nan(features_np)
 
-        # Apply feature noise before PCA
-        features_np = feature_noise(torch.tensor(features_np), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
-
-        # Apply PCA
-        features_np = apply_pca(features_np, n_components=args.pca_components)
-
         # Splitting the data into training, test, and a clean test set
         X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
         X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
@@ -737,16 +740,6 @@ def main():
             X_clean_test, y_clean_test = data['X_test'], data['y_test']
         y_clean_test = label_encoder.transform(y_clean_test)
 
-        # Apply feature noise before PCA
-        X_train = feature_noise(torch.tensor(X_train), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
-        X_test = feature_noise(torch.tensor(X_test), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
-        X_clean_test = feature_noise(torch.tensor(X_clean_test), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
-
-        # Apply PCA
-        X_train = apply_pca(X_train, n_components=args.pca_components)
-        X_test = apply_pca(X_test, n_components=args.pca_components)
-        X_clean_test = apply_pca(X_clean_test, n_components=args.pca_components)
-
     elif args.dataset == 'BODMAS':
         npz_file_path = 'data/Windows_PE/synthetic/malware_true.npz'
         with np.load(npz_file_path) as data:
@@ -754,14 +747,6 @@ def main():
             X_test, y_test = data['X_test'], data['y_test']
         y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
-
-        # Apply feature noise before PCA
-        X_temp = feature_noise(torch.tensor(X_temp), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
-        X_test = feature_noise(torch.tensor(X_test), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
-
-        # Apply PCA
-        X_temp = apply_pca(X_temp, n_components=args.pca_components)
-        X_test = apply_pca(X_test, n_components=args.pca_components)
 
         # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
@@ -824,6 +809,16 @@ def main():
 
         # Introduce noise to the imbalanced data
         y_train__label_noisy, label_noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.label_noise_type, args.label_noise_rate)
+
+        # Apply feature noise
+        X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+
+        # Print class distribution after introducing noise
+        print("Before augmentation:")
+        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+        print(f"Length of y_train__label_noisy: {len(y_train__label_noisy)}")
+        print(f"Length of label_noise_or_not: {len(label_noise_or_not)}")
+        print("Class distribution after introducing noise:", {label: np.sum(y_train__label_noisy == label) for label in np.unique(y_train__label_noisy)})
 
         # Apply data augmentation to the noisy data
         X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train__label_noisy, args.data_augmentation)
