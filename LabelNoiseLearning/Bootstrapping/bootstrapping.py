@@ -59,7 +59,7 @@ for dirname, _, filenames in os.walk('/data'):
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
 nRowsRead = None 
- 
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
@@ -79,12 +79,39 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
+parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
+parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
 
 args = parser.parse_args()
 
 # Seed
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
+
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
+
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+    
+    return mult_noise * x + add_noise
 
 def boot_soft(y_true, y_pred):
     beta = 0.95
@@ -369,7 +396,6 @@ def apply_data_augmentation(features, labels, augmentation_method):
     except NotFittedError as e:
         print(f"Model fitting error with {augmentation_method}: {e}")
         return features, labels
-
 
 
 def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'):
@@ -678,11 +704,35 @@ def handle_inf_nan(features_np):
     scaler = StandardScaler()
     return scaler.fit_transform(features_np)
 
-
-
-
-
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--lr', type=float, default=0.0001)
+    parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
+    parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
+    parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
+    parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature', 'MIMICRY'], default='uniform')
+    parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
+    parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017', 'windows_pe_real', 'BODMAS'])
+    parser.add_argument('--n_epoch', type=int, default=150)
+    parser.add_argument('--optimizer', type=str, default='adam')
+    parser.add_argument('--seed', type=int, default=1)
+    parser.add_argument('--print_freq', type=int, default=1)
+    parser.add_argument('--num_workers', type=int, default=1, help='how many subprocesses to use for data loading')
+    parser.add_argument('--epoch_decay_start', type=int, default=80)
+    parser.add_argument('--model_type', type=str, help='', choices=['soft', 'hard'], default='soft')
+    parser.add_argument('--fr_type', type=str, help='forget rate type', default='type_1')
+    parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
+    parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
+    parser.add_argument('--weight_resampling', type=str, choices=['none', 'Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
+    parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
+    parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+
+    args = parser.parse_args()
+
+    # Seed
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+
     label_encoder = LabelEncoder()
 
     if args.dataset == 'CIC_IDS_2017':
@@ -726,8 +776,6 @@ def main():
         # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
-
-
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
@@ -744,42 +792,35 @@ def main():
     full_dataset_metrics_file = os.path.join(results_dir, f"{base_filename}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
 
-
-
     # Prepare CSV file for validation metrics
     with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'Class {label+1}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'windows_pe_real':
-            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-                    "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
+            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber", "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue", "InstallMonster", "Locky"]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in labels]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
     # Prepare CSV file for validation metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'Class {label+1}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'windows_pe_real':
-            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-                    "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
+            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber", "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue", "InstallMonster", "Locky"]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in labels]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-
 
     # Print the original dataset sizes and class distribution
     print("Original dataset:")
@@ -798,6 +839,9 @@ def main():
 
     # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+
+    # Apply feature noise
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
 
     # Print class distribution after introducing noise
     print("Before augmentation:")
@@ -842,8 +886,6 @@ def main():
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 
-
-
         if args.model_type == 'soft':
             criterion = BootSoftLoss(beta=0.95)
         else:
@@ -855,14 +897,13 @@ def main():
 
             # Update metrics with Fold and Epoch at the beginning
             row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
-            with open(validation_metrics_file, "a", newline='',encoding='utf-8') as csvfile:
+            with open(validation_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writerow(row_data)
 
     print("Training completed. Results from all folds:")
     for i, result in enumerate(results, 1):
         print(f'Results Fold {i}:', result)
-
 
     # Full dataset training
     print("Training on the full dataset...")
@@ -874,15 +915,12 @@ def main():
     full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
     full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
-    full_criterion = CrossEntropyLoss()
+    full_criterion = nn.CrossEntropyLoss()
 
     # Train on the full augmented dataset
     print("Training on the full augmented dataset...")
     for epoch in range(args.n_epoch):
         train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
-
-
-
 
     # Prepare clean data for evaluation
     clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
@@ -912,7 +950,6 @@ def main():
         writer.writerow(row_data)
 
     print("Final evaluation completed.")
-
 
 if __name__ == '__main__':
     main()
