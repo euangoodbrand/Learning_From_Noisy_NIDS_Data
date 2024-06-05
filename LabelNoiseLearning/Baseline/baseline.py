@@ -75,6 +75,8 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
+parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
+parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
 
 args = parser.parse_args()
 
@@ -96,7 +98,6 @@ elif args.dataset == "BODMAS":
     batch_size = 128
     learning_rate = args.lr 
     init_epoch = 0
-
 
 
 class CICIDSDataset(Dataset):
@@ -204,7 +205,30 @@ noise_transition_matrix = np.array([
     [0.000000, 0.000000, 0.000000, 0.019231, 0.730769, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.250000]
 ])
 
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
 
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+    
+    return mult_noise * x + add_noise
 
 def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
     if noise_rate == 0:
@@ -377,7 +401,7 @@ def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'
 
     # Normalize weights to sum to number of classes
     total_weight = np.sum(weights)
-    if total_weight == 0:
+    if (total_weight == 0):
         weights = np.ones(no_of_classes, dtype=np.float32)
     else:
         weights = (weights / total_weight) * no_of_classes
@@ -660,8 +684,6 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 
-
-
 def main():
     print(model_str)
     print(model_str)
@@ -781,6 +803,9 @@ def main():
     # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
+    # Apply feature noise
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+
     # Print class distribution after introducing noise
     print("Before augmentation:")
     print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
@@ -859,8 +884,6 @@ def main():
     print("Training on the full augmented dataset...")
     for epoch in range(args.n_epoch):
         train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
-
-
 
 
     # Prepare clean data for evaluation
