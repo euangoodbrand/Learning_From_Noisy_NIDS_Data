@@ -88,6 +88,10 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
+parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
+parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+
+
 
 args = parser.parse_args()
 
@@ -131,6 +135,32 @@ if args.forget_rate is None:
     forget_rate=args.noise_rate
 else:
     forget_rate=args.forget_rate
+
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
+
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+
+    return mult_noise * x + add_noise
+
 
 
 def introduce_noise(labels, features, noise_type, noise_rate):
@@ -845,8 +875,6 @@ def main():
         # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
-
-
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
@@ -862,8 +890,6 @@ def main():
     validation_metrics_file = os.path.join(results_dir, f"{base_filename}_validation.csv")
     full_dataset_metrics_file = os.path.join(results_dir, f"{base_filename}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
-
-
 
     # Prepare CSV file for validation metrics
     with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
@@ -917,6 +943,9 @@ def main():
     # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
+    # Apply feature noise
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+
     # Print class distribution after introducing noise
     print("Before augmentation:")
     print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
@@ -929,7 +958,7 @@ def main():
 
     if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
         # Recalculate noise_or_not to match the augmented data size
-        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool) 
+        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
 
     # Print class distribution after data augmentation
     print("After augmentation:")
@@ -937,7 +966,6 @@ def main():
     print(f"Length of y_train_augmented: {len(y_train_augmented)}")
     print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
     print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
-    
 
     # Cross-validation training
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
@@ -970,7 +998,6 @@ def main():
             init_matrix = torch.full((num_classes, num_classes), fill_value=0.1).cuda()  # A small positive value for all elements
             init_matrix.fill_diagonal_(10.0)  # Higher concentration on the diagonal
 
-
             # Betas for decay and update in the DirichletTransition
             betas = (0.999, 0.01) 
 
@@ -989,8 +1016,6 @@ def main():
     print("Training completed. Results from all folds:")
     for i, result in enumerate(results, 1):
         print(f'Results Fold {i}:', result)
-
-
 
     # Full dataset training with LIO
     print("Training on the full dataset...")
@@ -1043,7 +1068,6 @@ def main():
         writer.writerow(row_data)
 
     print("Final evaluation completed.")
-
 
 if __name__ == '__main__':
     main()
