@@ -82,6 +82,9 @@ parser.add_argument('--epoch_interval', default=40, help="interval for updating 
 parser.add_argument('--every_n_epoch', default=10, help='rolling window for estimating f(x)_t', type=int)
 parser.add_argument('--two_stage', default=False, help='train NN again with clean data using original cross entropy', type=bool)
 
+parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
+parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+
 
 args = parser.parse_args()
 
@@ -129,6 +132,32 @@ if args.forget_rate is None:
     forget_rate=args.noise_rate
 else:
     forget_rate=args.forget_rate
+
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
+
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+
+    return mult_noise * x + add_noise
+
 
 
 def introduce_noise(labels, features, noise_type, noise_rate):
@@ -793,8 +822,6 @@ def main():
         # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
-
-
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
@@ -810,8 +837,6 @@ def main():
     validation_metrics_file = os.path.join(results_dir, f"{base_filename}_validation.csv")
     full_dataset_metrics_file = os.path.join(results_dir, f"{base_filename}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
-
-
 
     # Prepare CSV file for validation metrics
     with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
@@ -852,10 +877,11 @@ def main():
     # Apply imbalance to the training dataset
     X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
 
-
     # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
+    # Apply feature noise
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
 
     # Apply data augmentation to the noisy data
     X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
@@ -863,7 +889,6 @@ def main():
     if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
         # Recalculate noise_or_not to match the augmented data size
         noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
-
 
     # ------------------------- Initialize Setting ------------------------------
     num_class = len(np.unique(y_train_augmented))
@@ -876,7 +901,6 @@ def main():
         X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
         y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
         noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
-
 
         # Initializing datasets and dataloaders
         train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
@@ -892,7 +916,6 @@ def main():
 
         # Map global indices to local indices
         global_to_local_index = {idx: i for i, idx in enumerate(train_idx)}
-
 
         for epoch in range(args.n_epoch):
             local_indices_updated = [global_to_local_index[idx] for idx in train_idx if idx in global_to_local_index]
@@ -913,8 +936,6 @@ def main():
     print("Training completed. Results from all folds:")
     for i, result in enumerate(results, 1):
         print(f'Results Fold {i}:', result)
-
-
 
     # Full dataset training with LRT
     print("Training on the full dataset with LRT...")
@@ -966,7 +987,6 @@ def main():
         writer.writerow(row_data)
 
     print("Final evaluation completed.")
-
 
 if __name__ == '__main__':
     main()
