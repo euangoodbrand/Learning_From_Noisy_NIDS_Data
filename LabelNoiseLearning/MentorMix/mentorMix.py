@@ -85,7 +85,12 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
+parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
+parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+
+
 args = parser.parse_args()
+
 
 # Seed
 torch.manual_seed(args.seed)
@@ -136,6 +141,31 @@ if args.forget_rate is None:
     forget_rate=args.noise_rate
 else:
     forget_rate=args.forget_rate
+
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
+
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+    
+    return mult_noise * x + add_noise
 
 
 def introduce_noise(labels, features, noise_type, noise_rate):
@@ -449,7 +479,7 @@ save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
 if not os.path.exists(save_dir):
     os.system('mkdir -p %s' % save_dir)
 
-model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
+model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}"
 
 txtfile = save_dir + "/" + model_str + ".csv"
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -767,13 +797,11 @@ def test(args, StudentNet, test_dataloader, optimizer_S, scheduler_S, epoch):
 def main():
     print(model_str)
 
-
     # Optimizer and scheduler setup
     learning_rate = 0.1
     weight_decay = 0.0002
     momentum = 0.9
     nesterov = False
-
 
     label_encoder = LabelEncoder()
 
@@ -817,8 +845,6 @@ def main():
         
         # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
-
-
 
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
@@ -888,6 +914,9 @@ def main():
     # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
+    # Apply feature noise
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+
     # Print class distribution after introducing noise
     print("Before augmentation:")
     print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
@@ -907,7 +936,6 @@ def main():
     print(f"Length of y_train_augmented: {len(y_train_augmented)}")
     print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
     print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
-    
 
     # Cross-validation training
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
@@ -965,7 +993,6 @@ def main():
             MentorNet_filename = f"{path_MentorNet}/MentorNet_Fold_{fold}"
             torch.save(mentornet.state_dict(), MentorNet_filename + f'_Epoch_{epoch+1}.pt')
 
-
         # second training run for student after mentor has been trained
         
         path_MentorNet = './checkpoint/MentorNet'
@@ -1001,12 +1028,10 @@ def main():
         for epoch in range(args.n_epoch):
             loss_p_prev, loss_p_second_prev = train_student(args, mentornet, studentnet, train_loader, optimizer_student, scheduler_student, loss_p_prev, loss_p_second_prev, epoch)
             
-            
             evaluation_metrics = evaluate(val_loader, studentnet, label_encoder, args, save_conf_matrix=True, return_predictions=False)
             print(f"Evaluation Metrics for Epoch {epoch+1}: {evaluation_metrics}")
             acc = test(args, studentnet, val_loader, optimizer_student, scheduler_student, epoch)
 
-            
             scheduler_student.step()
             if best_acc < acc:
                 best_acc = acc
@@ -1020,7 +1045,6 @@ def main():
             with open(validation_metrics_file, "a", newline='',encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writerow(row_data)
-
 
     # Initialize and train MentorNet on the full dataset
     print("Initializing and training MentorNet on the full dataset...")
@@ -1099,7 +1123,3 @@ def main():
         writer.writerow(row_data)
 
     print("Final evaluation completed.")
-
-
-if __name__ == '__main__':
-    main()
