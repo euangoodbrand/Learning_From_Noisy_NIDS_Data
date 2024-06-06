@@ -441,7 +441,7 @@ save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
 if not os.path.exists(save_dir):
     os.system('mkdir -p %s' % save_dir)
 
-model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
+model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}"
 
 txtfile = save_dir + "/" + model_str + ".csv"
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
