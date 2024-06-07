@@ -77,6 +77,8 @@ parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', '
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
 parser.add_argument('--weight_decay', default=0.0001)
+parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
+parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
 
 args = parser.parse_args()
 
@@ -120,6 +122,32 @@ if args.forget_rate is None:
     forget_rate=args.noise_rate
 else:
     forget_rate=args.forget_rate
+
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
+
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+
+    return mult_noise * x + add_noise
+
 
 
 def introduce_noise(labels, features, noise_type, noise_rate):
@@ -706,6 +734,7 @@ def train_and_evaluate(train_loader, val_loader, model, criterion, optimizer, nu
             val_count += target.size(0)
     return val_accuracy / val_count
 
+
 def main():
     print(model_str)
     label_encoder = LabelEncoder()
@@ -751,8 +780,6 @@ def main():
         # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
-
-
     # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
@@ -769,39 +796,37 @@ def main():
     full_dataset_metrics_file = os.path.join(results_dir, f"{base_filename}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
 
-
-
     # Prepare CSV file for validation metrics
     with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'Class {label + 1}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'windows_pe_real':
             labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-                    "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
+                      "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                      "InstallMonster", "Locky"]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in labels]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-    # Prepare CSV file for validation metrics
+    # Prepare CSV file for full dataset metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'Class {label + 1}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in label_encoder.classes_]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'windows_pe_real':
             labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-                    "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
+                      "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                      "InstallMonster", "Locky"]
+            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + \
+                         [f'{label}_acc' for label in labels]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
@@ -822,6 +847,9 @@ def main():
 
     # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+
+    # Apply feature noise
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
 
     # Print class distribution after introducing noise
     print("Before augmentation:")
@@ -844,7 +872,6 @@ def main():
     print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
     print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
     
-
     # Cross-validation training with noise adaptation
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
     results = []
@@ -887,12 +914,12 @@ def main():
         criterion = nn.CrossEntropyLoss()
 
         for epoch in range(args.n_epoch):
-            train(train_loader, model,noisemodel, optimizer,noise_optimizer, criterion, epoch, len(np.unique(y_train_fold)))
+            train(train_loader, model, noisemodel, optimizer, noise_optimizer, criterion, epoch, len(np.unique(y_train_fold)))
             metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
 
             # Update metrics with Fold and Epoch at the beginning
             row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
-            with open(validation_metrics_file, "a", newline='',encoding='utf-8') as csvfile:
+            with open(validation_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writerow(row_data)
 
@@ -905,7 +932,6 @@ def main():
     # Prepare the full augmented dataset for training
     full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
     full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-
 
     # Prepare clean data for evaluation
     clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
@@ -920,13 +946,11 @@ def main():
     train_and_evaluate(full_train_loader, clean_test_loader, full_model, criterion, optimizer, args.n_epoch)
     conf_matrix = calculate_confusion_matrix(full_model, full_train_loader, len(np.unique(y_train_augmented)))
 
-
     # Prepare noise model with the calculated confusion matrix
     channel_weights = conf_matrix.copy()
     channel_weights /= channel_weights.sum(axis=1, keepdims=True)  # Normalize
     channel_weights = np.log(channel_weights + 1e-8)  # Stability in log
     channel_weights = torch.from_numpy(channel_weights).float().cuda()
-
 
     full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
 
@@ -936,20 +960,10 @@ def main():
 
     full_criterion = CrossEntropyLoss()
 
-
-
-
     # Train on the full augmented dataset
     print("Training on the full augmented dataset...")
     for epoch in range(args.n_epoch):
-        train(full_train_loader, full_model,full_noisemodel, full_optimizer,full_noise_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
-
-
-
-
-    # Prepare clean data for evaluation
-    clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
-    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+        train(full_train_loader, full_model, full_noisemodel, full_optimizer, full_noise_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
 
     # Evaluate the full model on clean dataset and save predictions
     print("Evaluating on clean dataset...")
