@@ -111,6 +111,10 @@ parser.add_argument('--T', type=float, default=1.0, help='Temperature for softma
 parser.add_argument('--use_proto', default=False, type=bool)
 parser.add_argument('--threshold', default=0.40, type=float, # 0.95 for malware-real, 0.40 for malware-syn
                         help='pseudo label threshold')
+
+parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
+parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+               
 args = parser.parse_args()
 
 
@@ -153,6 +157,33 @@ if args.forget_rate is None:
     forget_rate=args.noise_rate
 else:
     forget_rate=args.forget_rate
+
+
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
+
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size[x.shape])  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+    
+    return mult_noise * x + add_noise
+
 
 
 def introduce_noise(labels, features, noise_type, noise_rate):
@@ -707,7 +738,7 @@ def splite_confident(self, outs, clean_targets, noisy_targets):
 
     return labeled_indexs, unlabeled_indexs
 
-def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, model, optimizer, criterion, args, threshold):
+def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, model, optimizer, criterion, args, threshold, prev_labels, prev_labels_idx):
     model.train()
 
     losses = AverageMeter()
@@ -737,22 +768,13 @@ def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb
         y_imb_l = y_imb_l.cuda()
         given_u = given_u.cuda()
 
-        # Print tensor shapes for debugging
-        # print(f"Shape of xl: {xl.shape}")
-        # print(f"Shape of xw: {xw.shape}")
-        # print(f"Shape of xs: {xs.shape}")
-        # print(f"Shape of x_imb_l: {x_imb_l.shape}")
-
-
         if args.dataset == 'windows_pe_real':
-            # Reshape xs to [128, 1024] if necessary
             if xs.ndim == 2 and xs.shape[1] == 1:
                 xs = xs.view(-1, 1024)
             elif xs.ndim == 1:
                 xs = xs.unsqueeze(1).repeat(1, 1024)
 
         elif args.dataset == 'BODMAS':
-            # Reshape xs to [128, 2381] if necessary
             if xs.ndim == 2 and xs.shape[1] == 1:
                 xs = xs.view(-1, 2381)
             elif xs.ndim == 1:
@@ -770,7 +792,6 @@ def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb
             lam = np.random.beta(args.alpha, args.alpha)
             lam = max(lam, 1 - lam)
             idx = torch.randperm(xl.size()[0])
-            # mixup in hidden-layers
             mix_x = model.forward_encoder(x_imb_l) * lam + (1 - lam) * model.forward_encoder(xl)
             mix_logits = model.forward_classifier(mix_x)
             Lx = mixup_criterion(criterion, mix_logits, y_imb_l, yl[idx], lam)
@@ -781,10 +802,9 @@ def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb
 
         elif args.imb_method == 'logits':
             logits_x = model(xl)
-            logits_x += logit
             Lx = F.cross_entropy(logits_x, yl, reduction='mean')
+            logit = logits_x  # Define logit here using logits_x
 
-        # Use SupConLoss
         if args.use_scl:
             feat = model.forward_feat(xl)
             feat = feat.unsqueeze(1)
@@ -805,24 +825,7 @@ def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb
             else:
                 yu, mask = refine_pesudo_label(xw, probs, threshold, prototype, model)
 
-        # cal the max-probs of each class
-        if 'gt_u' in locals():
-            debug_t = debug_threshold(probs, gt_u, mask, args.num_class)
-            for i in range(len(debug_t_list)):
-                debug_t_list[i].update(debug_t[i])
-
-            debug_ratio = debug_unlabel_info(yu, gt_u, mask, args.num_class)
-            for i in range(len(debug_list)):
-                debug_list[i].update(debug_ratio[i])
-
-        # Debug: Print the range of given_u values before clamping
-        # print(f"Range of given_u values before clamping: {given_u.min().item()} to {given_u.max().item()}")
-
-        # Ensure given_u values are within the valid range by clamping
         given_u = torch.clamp(given_u, 0, args.num_class - 1)
-
-        # Debug: Print the range of given_u values after clamping
-        # print(f"Range of given_u values after clamping: {given_u.min().item()} to {given_u.max().item()}")
 
         if args.use_hard_labels:
             Lu = (F.cross_entropy(logits_xs, yu, weight=class_weights, reduction='none') * mask).mean()
@@ -836,7 +839,6 @@ def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb
         else:
             loss = Lx + args.lambda_u * Lu
 
-        # update model
         optimizer.zero_grad()
         loss.backward()
         losses.update(loss.item())
@@ -850,7 +852,9 @@ def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb
         if args.use_proto:
             prototype = update_proto(xl, yl, prototype, model)
     
-    print('Epoch [%3d/%3d] Loss: %.2f' % (epoch, args.n_epoch, losses.avg)) # Added to print epoch details during ourmatch_train function
+    print('Epoch [%3d/%3d] Loss: %.2f' % (epoch, args.n_epoch, losses.avg))
+
+
 
 def main():
     print(model_str)
@@ -902,7 +906,7 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     # Define the base filename with weight resampling status
-    resampling_status = 'weight_resampling' if args.weight_resampling !='none' else 'no_weight_resampling'
+    resampling_status = 'weight_resampling' if args.weight_resampling != 'none' else 'no_weight_resampling'
     if args.weight_resampling:
         base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{args.weight_resampling}_{resampling_status}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
     else:
@@ -964,6 +968,9 @@ def main():
 
     # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+
+    # Apply feature noise
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
 
     # Print class distribution after introducing noise
     print("Before augmentation:")
@@ -1035,16 +1042,19 @@ def main():
         saved_models_dir = os.path.join(results_dir, 'saved_models')
         os.makedirs(saved_models_dir, exist_ok=True)
 
+        # Initialize prev_labels and prev_labels_idx
+        prev_labels = torch.zeros((args.dist_alignment_batches, args.num_class)).cuda()
+        prev_labels_idx = 0
+
         for epoch in range(args.n_epoch):
             if epoch < args.warmup:
                 warmup(epoch, train_loader, model, optimizer)
             else:
-                # Simulating the update_loader functionality
                 labeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
                 unlabeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
                 imb_labeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
 
-                ourmatch_train(epoch, train_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, model, optimizer, criterion, args, threshold)
+                ourmatch_train(epoch, train_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, model, optimizer, criterion, args, threshold, prev_labels, prev_labels_idx)
 
             adjust_learning_rate(optimizer, epoch)  # Adjust learning rate before evaluation
             metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
