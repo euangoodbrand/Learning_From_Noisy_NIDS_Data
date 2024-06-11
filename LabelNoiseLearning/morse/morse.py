@@ -114,6 +114,7 @@ parser.add_argument('--threshold', default=0.40, type=float, # 0.95 for malware-
 
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+parser.add_argument('--weight_decay_l2', type=float, default=0.0, help='Weight decay for L2 regularization. Default is 0 (no regularization).')
                
 args = parser.parse_args()
 
@@ -478,7 +479,7 @@ save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
 if not os.path.exists(save_dir):
     os.system('mkdir -p %s' % save_dir)
 
-model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}"
+model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}_L2_{args.weight_decay}"
 
 txtfile = save_dir + "/" + model_str + ".csv"
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -1027,7 +1028,7 @@ def main():
         model.apply(weights_init)
 
         # Define the optimizer and criterion after model initialization
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay_l2)
         criterion = nn.CrossEntropyLoss()
 
         # Initialize the learning rate scheduler
@@ -1087,7 +1088,7 @@ def main():
     # Prepare the full model
     full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
+    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay_l2)
     full_criterion = CrossEntropyLoss()
 
     # Train on the full augmented dataset
