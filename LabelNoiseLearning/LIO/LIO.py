@@ -90,6 +90,7 @@ parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay for L2 regularization. Default is 0 (no regularization).')
 
 
 
@@ -463,7 +464,7 @@ save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
 if not os.path.exists(save_dir):
     os.system('mkdir -p %s' % save_dir)
 
-model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}"
+model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}_L2_{args.weight_decay}"
 
 txtfile = save_dir + "/" + model_str + ".csv"
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -990,7 +991,7 @@ def main():
 
         model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
         model.apply(weights_init)
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         criterion = nn.CrossEntropyLoss()
 
         for epoch in range(args.n_epoch):
@@ -1025,7 +1026,7 @@ def main():
     # Prepare the full model
     full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
+    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # Prepare the transition model for LIO
     num_classes = len(np.unique(y_train_augmented))

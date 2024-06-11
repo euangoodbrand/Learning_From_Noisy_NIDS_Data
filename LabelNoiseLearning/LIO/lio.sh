@@ -100,5 +100,37 @@ do
       done
     done
 
+    # Experiment 14: Additive noise levels with L2 regularization
+    for add_noise_level in "${add_noise_levels[@]}"; do
+      CUDA_LAUNCH_BLOCKING=1 python LIO.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --noise_rate 0.0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_14
+    done
+
+    # Experiment 15: Multiplicative noise levels with L2 regularization
+    for mult_noise_level in "${mult_noise_levels[@]}"; do
+      CUDA_LAUNCH_BLOCKING=1 python LIO.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --noise_rate 0.0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_15
+    done
+
+    # Experiment 16: Combination of additive and multiplicative noise levels with L2 regularization
+    for add_noise_level in "${add_noise_levels[@]}"; do
+      for mult_noise_level in "${mult_noise_levels[@]}"; do
+        CUDA_LAUNCH_BLOCKING=1 python LIO.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --noise_rate 0.0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_16
+      done
+    done
+
+    # Experiment 17: Label noise with additive noise levels and L2 regularization
+    for noise_rate in "${noise_rates[@]}"; do
+      for add_noise_level in "${add_noise_levels[@]}"; do
+        CUDA_LAUNCH_BLOCKING=1 python LIO.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --noise_rate ${noise_rate} --noise_type uniform --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_17
+      done
+    done
+
+    # Experiment 18: Label noise with multiplicative noise levels and L2 regularization
+    for noise_rate in "${noise_rates[@]}"; do
+      for mult_noise_level in "${mult_noise_levels[@]}"; do
+        CUDA_LAUNCH_BLOCKING=1 python LIO.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --noise_rate ${noise_rate} --noise_type uniform --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_18
+      done
+    done
+
+
   done
 done
