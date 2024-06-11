@@ -77,6 +77,8 @@ parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+parser.add_argument('--weight_decay', type=float, default=0.0, help='L2 regularization weight decay. Default is 0 (no regularization).')
+
 
 args = parser.parse_args()
 
@@ -851,7 +853,7 @@ def main():
 
         model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
         model.apply(weights_init)
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         criterion = nn.CrossEntropyLoss()
 
         for epoch in range(args.n_epoch):
@@ -877,7 +879,7 @@ def main():
     # Prepare the full model
     full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
+    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     full_criterion = CrossEntropyLoss()
 
     # Train on the full augmented dataset
