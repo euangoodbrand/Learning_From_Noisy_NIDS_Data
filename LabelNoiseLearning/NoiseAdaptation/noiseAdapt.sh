@@ -103,5 +103,37 @@ do
         done
     done
 
+    # Experiment 14 - Additive Noise with L2 regularization
+    for add_noise_level in "${feature_add_noise_levels[@]}"; do
+        CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_14$
+    done
+
+    # Experiment 15 - Multiplicative Noise with L2 regularization
+    for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+        CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_15$
+    done
+
+    # Experiment 16 - Additive and Multiplicative Noise with L2 regularization
+    for add_noise_level in "${feature_add_noise_levels[@]}"; do
+        for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_16$
+        done
+    done
+
+    # Experiment 17 - Label and Additive Noise with L2 regularization
+    for noise_rate in "${noise_rates[@]}"; do
+        for add_noise_level in "${feature_add_noise_levels[@]}"; do
+            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_17$
+        done
+    done
+
+    # Experiment 18 - Label and Multiplicative Noise with L2 regularization
+    for noise_rate in "${noise_rates[@]}"; do
+        for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+            CUDA_LAUNCH_BLOCKING=1 python noiseAdaptation.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_18$
+        done
+    done
+
+
   done
 done
