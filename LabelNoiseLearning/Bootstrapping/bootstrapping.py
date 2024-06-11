@@ -64,7 +64,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
 parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
-parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
 parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
 parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
@@ -81,6 +80,7 @@ parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
+parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay for L2 regularization. Default is 0 (no regularization).')
 
 args = parser.parse_args()
 
@@ -160,13 +160,6 @@ class CICIDSDataset(Dataset):
 
     def __len__(self):
         return len(self.labels)
-
-
-if args.forget_rate is None:
-    forget_rate=args.noise_rate
-else:
-    forget_rate=args.forget_rate
-
 
 def introduce_noise(labels, features, noise_type, noise_rate):
     if noise_type == 'uniform':
@@ -454,21 +447,13 @@ def adjust_learning_rate(optimizer, epoch):
         param_group['lr']=alpha_plan[epoch]
         param_group['betas']=(beta1_plan[epoch], 0.999) 
        
-# define drop rate schedule
-def gen_forget_rate(fr_type='type_1'):
-    if fr_type=='type_1':
-        rate_schedule = np.ones(args.n_epoch)*forget_rate
-        rate_schedule[:args.num_gradual] = np.linspace(0, forget_rate, args.num_gradual)
-    return rate_schedule
-
-rate_schedule = gen_forget_rate(args.fr_type)
   
 save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
 
 if not os.path.exists(save_dir):
     os.system('mkdir -p %s' % save_dir)
 
-model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}"
+model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}_L2_{args.weight_decay}"
 
 txtfile = save_dir + "/" + model_str + ".csv"
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -705,34 +690,6 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--lr', type=float, default=0.0001)
-    parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
-    parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
-    parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
-    parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature', 'MIMICRY'], default='uniform')
-    parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
-    parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017', 'windows_pe_real', 'BODMAS'])
-    parser.add_argument('--n_epoch', type=int, default=150)
-    parser.add_argument('--optimizer', type=str, default='adam')
-    parser.add_argument('--seed', type=int, default=1)
-    parser.add_argument('--print_freq', type=int, default=1)
-    parser.add_argument('--num_workers', type=int, default=1, help='how many subprocesses to use for data loading')
-    parser.add_argument('--epoch_decay_start', type=int, default=80)
-    parser.add_argument('--model_type', type=str, help='', choices=['soft', 'hard'], default='soft')
-    parser.add_argument('--fr_type', type=str, help='forget rate type', default='type_1')
-    parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
-    parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
-    parser.add_argument('--weight_resampling', type=str, choices=['none', 'Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
-    parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
-    parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
-
-    args = parser.parse_args()
-
-    # Seed
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-
     label_encoder = LabelEncoder()
 
     if args.dataset == 'CIC_IDS_2017':
@@ -883,7 +840,7 @@ def main():
 
         model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
         model.apply(weights_init)
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         criterion = nn.CrossEntropyLoss()
 
         if args.model_type == 'soft':
@@ -914,7 +871,7 @@ def main():
     # Prepare the full model
     full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr)
+    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     full_criterion = nn.CrossEntropyLoss()
 
     # Train on the full augmented dataset
