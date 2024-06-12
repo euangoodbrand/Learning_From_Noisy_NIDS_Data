@@ -61,7 +61,7 @@ nRowsRead = None
 parser = argparse.ArgumentParser()
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
-parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
+parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.0)
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
 parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
@@ -433,7 +433,14 @@ save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
 if not os.path.exists(save_dir):
     os.system('mkdir -p %s' % save_dir)
 
-model_str = f"{args.model_type}_{args.dataset}_{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}_L2_{args.weight_decay}"
+model_str = (
+    f"{args.model_type}_{args.dataset}_"
+    f"{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_"
+    f"{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_"
+    f"addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}_"
+    f"{args.weight_resampling if args.weight_resampling != 'none' else 'no_weight_resampling'}"
+)
+
 
 txtfile = save_dir + "/" + model_str + ".csv"
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -672,9 +679,6 @@ def handle_inf_nan(features_np):
     return scaler.fit_transform(features_np)
 
 def main():
-    print(model_str)
-    print(model_str)
-    print(model_str)
     label_encoder = LabelEncoder()
 
     if args.dataset == 'CIC_IDS_2017':
@@ -722,20 +726,14 @@ def main():
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
 
-    # Define the base filename with weight resampling status
-    resampling_status = 'weight_resampling' if args.weight_resampling else 'no_weight_resampling'
-    if args.weight_resampling != 'none':
-        base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{args.weight_resampling}_{resampling_status}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
-    else:
-        base_filename = f"{args.model_type}_{args.dataset}_dataset_{args.data_augmentation if args.data_augmentation != 'none' else 'no_augmentation'}_{resampling_status}_{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}"
-
     # File paths for CSV and model files
-    validation_metrics_file_model1 = os.path.join(results_dir, f"{base_filename}_validation_metrics_model1.csv")
-    validation_metrics_file_model2 = os.path.join(results_dir, f"{base_filename}_validation_metrics_model2.csv")
-    full_dataset_metrics_file_model1 = os.path.join(results_dir, f"{base_filename}_full_dataset_model1.csv")
-    full_dataset_metrics_file_model2 = os.path.join(results_dir, f"{base_filename}_full_dataset_model2.csv")
+    validation_metrics_file_model1 = os.path.join(results_dir, f"{model_str}_validation_metrics_model1.csv")
+    validation_metrics_file_model2 = os.path.join(results_dir, f"{model_str}_validation_metrics_model2.csv")
+    full_dataset_metrics_file_model1 = os.path.join(results_dir, f"{model_str}_full_dataset_model1.csv")
+    full_dataset_metrics_file_model2 = os.path.join(results_dir, f"{model_str}_full_dataset_model2.csv")
 
-    final_model_path = os.path.join(results_dir, f"{base_filename}_final_model.pth")
+    final_model_path = os.path.join(results_dir, f"{model_str}_final_model.pth")
+
 
     # Prepare CSV file for validation metrics
     with open(validation_metrics_file_model1, "w", newline='', encoding='utf-8') as csvfile:
@@ -868,9 +866,8 @@ def main():
         model2 = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
         model1.apply(weights_init)
         model2.apply(weights_init)
-        optimizer1 = optim.Adam(model1.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        optimizer2 = optim.Adam(model2.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
+        optimizer1 = optim.Adam(model1.parameters(), lr=args.lr)
+        optimizer2 = optim.Adam(model2.parameters(), lr=args.lr)
 
         for epoch in range(args.n_epoch):
             no_of_classes = len(np.unique(y_train))  
@@ -901,11 +898,11 @@ def main():
 
     full_model1 = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model1.apply(weights_init)
-    full_optimizer1 = optim.Adam(full_model1.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    full_optimizer1 = optim.Adam(full_model1.parameters(), lr=args.lr)
 
     full_model2 = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model2.apply(weights_init)
-    full_optimizer2 = optim.Adam(full_model2.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    full_optimizer2 = optim.Adam(full_model2.parameters(), lr=args.lr)
 
     for epoch in range(args.n_epoch):
         no_of_classes = len(np.unique(y_train)) 
@@ -923,8 +920,8 @@ def main():
     os.makedirs(predictions_dir, exist_ok=True)
 
     # Save predictions
-    predictions_filename1 = os.path.join(predictions_dir, f"{base_filename}_predictions_model1.csv")
-    predictions_filename2 = os.path.join(predictions_dir, f"{base_filename}_predictions_model2.csv")
+    predictions_filename1 = os.path.join(predictions_dir, f"{model_str}_predictions_model1.csv")
+    predictions_filename2 = os.path.join(predictions_dir, f"{model_str}_predictions_model2.csv")
     
     save_predictions(predictions1, predictions_filename1)
     save_predictions(predictions2, predictions_filename2)
