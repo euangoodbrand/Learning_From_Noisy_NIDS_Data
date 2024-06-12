@@ -1069,7 +1069,7 @@ def main():
             if metrics['accuracy'] > best_acc:
                 best_acc = metrics['accuracy']
                 # Save the best model in the created folder
-                torch.save(model.state_dict(), os.path.join(saved_models_dir, f"{base_filename}_best_model_fold{fold}.pth"))
+                torch.save(model.state_dict(), os.path.join(saved_models_dir, f"{model_str}_best_model_fold{fold}.pth"))
 
         lr_scheduler.step()  # Step the learning rate scheduler after each epoch
 
