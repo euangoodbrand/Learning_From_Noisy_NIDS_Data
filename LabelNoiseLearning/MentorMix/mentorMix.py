@@ -67,7 +67,7 @@ parser.add_argument('--gamma_p', type=float, default=0.75)
 parser.add_argument('--ema', type=float, default=0.05)
 
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
-parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.2)
+parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.0)
 parser.add_argument('--alpha', type=float, help='corruption rate, should be less than 1', default=2.0)
 
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
