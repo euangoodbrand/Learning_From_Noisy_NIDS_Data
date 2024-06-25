@@ -20,7 +20,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
 # Sklearn Import
-from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
@@ -46,49 +45,15 @@ import torch.nn.init as init
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
-from losses import LDAMLoss, SupConLoss, ce_loss
-
-#Morse imports
-from utils import AverageMeter, predict_dataset_softmax, get_labeled_dist
-from utils import debug_label_info, debug_unlabel_info, debug_real_label_info, debug_real_unlabel_info, debug_threshold
-from utils import refine_pesudo_label, update_proto, init_prototype, dynamic_threshold
-from torch.utils.data import DataLoader
-from losses import LDAMLoss, SupConLoss, ce_loss
-import timeit
-import math
 
 for dirname, _, filenames in os.walk('/data'):
     for filename in filenames:
         print(os.path.join(dirname, filename))
 
-
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
-nRowsRead = None 
-
 
 parser = argparse.ArgumentParser()
-
-parser.add_argument('--epsilon', type=float, default=0.95, help='Smoothing parameter for pseudo labels')
-parser.add_argument('--momentum', type=float, default=0.9)
-parser.add_argument('--weight_decay', type=float, default=2e-4)
-parser.add_argument('--nesterov', action='store_true', default=True,
-                    help='use nesterov momentum')
-parser.add_argument('--gamma', type=float, default=0.95, metavar='M',help='Learning rate step gamma (default: 0.7)')
-parser.add_argument('--lambda-u', default=1.0, type=float,
-                    help='coefficient of unlabeled loss')
-parser.add_argument('--num_class', type=int, default=None, help='number of classes in the dataset')
-parser.add_argument('--warmup', type=int, default=10) # 5 for malware-real, 10 for malware-syn
-parser.add_argument('--clean_theta', default=0.95, type=float)
-parser.add_argument('--use_hard_labels', default=False, type=bool) # soft version is better than hard label
-parser.add_argument('--use_scl', default=False, type=bool)
-parser.add_argument('--lambda-s', default=0.1, type=float)
-parser.add_argument('--dist_alignment', default=False, type=bool)
-parser.add_argument('--dist_alignment_eps', default=1e-6, type=float)
-parser.add_argument('--dist_alignment_batches', default=5, type=int)
-parser.add_argument('--reweight_start', default=30, type=int) # 40 for malware-real otherwise 20
-parser.add_argument('--imb_method', default='reweight', type=str)   # default is 're-weight'
-parser.add_argument('--use_pretrain', default=True, type=bool)
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
 parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.0)
@@ -107,17 +72,11 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
-parser.add_argument('--T', type=float, default=1.0, help='Temperature for softmax scaling')
-parser.add_argument('--use_proto', default=False, type=bool)
-parser.add_argument('--threshold', default=0.40, type=float, # 0.95 for malware-real, 0.40 for malware-syn
-                        help='pseudo label threshold')
-
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
-parser.add_argument('--weight_decay_l2', type=float, default=0.0, help='Weight decay for L2 regularization. Default is 0 (no regularization).')
-               
-args = parser.parse_args()
+parser.add_argument('--weight_decay', type=float, default=0.0, help='L2 regularization weight decay. Default is 0 (no regularization).')
 
+args = parser.parse_args()
 
 # Seed
 torch.manual_seed(args.seed)
@@ -138,8 +97,6 @@ elif args.dataset == "BODMAS":
     learning_rate = args.lr 
     init_epoch = 0
 
-
-
 class CICIDSDataset(Dataset):
     def __init__(self, features, labels, noise_or_not):
         self.features = features
@@ -147,7 +104,7 @@ class CICIDSDataset(Dataset):
         self.noise_or_not = noise_or_not 
 
     def __getitem__(self, index):
-        feature = torch.tensor(self.features[index], dtype=torch.float32).view(-1)
+        feature = torch.tensor(self.features[index], dtype=torch.float32)
         label = torch.tensor(self.labels[index], dtype=torch.long)
         return feature, label, index  
 
@@ -158,34 +115,6 @@ if args.forget_rate is None:
     forget_rate=args.noise_rate
 else:
     forget_rate=args.forget_rate
-
-
-def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
-    device = x.device
-    add_noise = torch.zeros_like(x, device=device)
-    mult_noise = torch.ones_like(x, device=device)
-    scale_factor_additive = 75
-    scale_factor_multi = 200
-
-    if add_noise_level > 0.0:
-        # Generate additive noise with an aggressive Beta distribution
-        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
-        beta_add = torch.from_numpy(beta_add).float().to(device)
-        # Scale to [-1, 1] and then apply additive noise
-        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
-        add_noise = add_noise_level * beta_add
-
-    if mult_noise_level > 0.0:
-        # Generate multiplicative noise with an aggressive Beta distribution
-        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
-        beta_mult = torch.from_numpy(beta_mult).float().to(device)
-        # Scale to [-1, 1] and then apply multiplicative noise
-        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
-        mult_noise = 1 + mult_noise_level * beta_mult
-    
-    return mult_noise * x + add_noise
-
-
 
 def introduce_noise(labels, features, noise_type, noise_rate):
     if noise_type == 'uniform':
@@ -201,7 +130,6 @@ def introduce_noise(labels, features, noise_type, noise_rate):
         return introduce_mimicry_noise(labels, predefined_matrix, noise_rate)
     else:
         raise ValueError("Invalid noise type specified.")
-
 
 def apply_data_augmentation(features, labels, augmentation_method):
     try:
@@ -237,8 +165,6 @@ def apply_data_augmentation(features, labels, augmentation_method):
         print(f"Model fitting error with {augmentation_method}: {e}")
         return features, labels
 
-
-
 # Class dependant noise matrix, from previous evaluation run.
 predefined_matrix = np.array([
     [0.8, 0.03, 0.01, 0.01, 0.06, 0.0, 0.0, 0.0, 0.07, 0.0, 0.02, 0.0],
@@ -271,7 +197,30 @@ noise_transition_matrix = np.array([
     [0.000000, 0.000000, 0.000000, 0.019231, 0.730769, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.250000]
 ])
 
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
 
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+    
+    return mult_noise * x + add_noise
 
 def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
     if noise_rate == 0:
@@ -291,7 +240,6 @@ def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate
 
     return new_labels, noise_or_not
 
-
 def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
     if noise_rate == 0:
         return labels.copy(), np.zeros(len(labels), dtype=bool)
@@ -310,12 +258,10 @@ def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
 
     return new_labels, noise_or_not
 
-
 def calculate_feature_thresholds(features):
     # Calculate thresholds for each feature, assuming features is a 2D array
     thresholds = np.percentile(features, 50, axis=0)  # Median as threshold for each feature
     return thresholds
-
 
 def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5):
     if noise_rate == 0:
@@ -345,8 +291,6 @@ def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neig
 
     return new_labels, noise_or_not
 
-
-
 def introduce_uniform_noise(labels, noise_rate):
     if noise_rate == 0:
         return labels.copy(), np.zeros(len(labels), dtype=bool)
@@ -367,7 +311,6 @@ def introduce_uniform_noise(labels, noise_rate):
         noise_or_not[idx] = True
 
     return new_labels, noise_or_not
-
 
 def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample_half=True):
     if ratio == 0:
@@ -418,9 +361,13 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
     
     return features[indices_to_keep], labels[indices_to_keep]
 
-def compute_weights(labels, num_classes, beta=0.9999, gamma=2.0, device='cuda'):
+def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'):
+    # Convert labels to a numpy array if it's a tensor
+    if isinstance(labels, torch.Tensor):
+        labels = labels.cpu().numpy()
+
     # Count each class's occurrence
-    samples_per_class = np.bincount(labels.cpu().numpy(), minlength=num_classes)
+    samples_per_class = np.bincount(labels, minlength=no_of_classes)
 
     # Handling different weight resampling strategies
     if args.weight_resampling == 'Naive':
@@ -433,24 +380,25 @@ def compute_weights(labels, num_classes, beta=0.9999, gamma=2.0, device='cuda'):
         focal_weights = initial_weights ** gamma
         weights = focal_weights
     elif args.weight_resampling == 'none':
-        weights = np.ones(num_classes, dtype=np.float32)
+        weights = np.ones(no_of_classes, dtype=np.float32)
     else:
         print(f"Unsupported weight computation method: {args.weight_resampling}")
         raise ValueError("Unsupported weight computation method")
 
-    # Normalize weights to sum to the number of classes
+    # Normalize weights to sum to number of classes
     total_weight = np.sum(weights)
-    if total_weight == 0:
-        weights = np.ones(num_classes, dtype=np.float32)
+    if (total_weight == 0):
+        weights = np.ones(no_of_classes, dtype=np.float32)
     else:
-        weights = (weights / total_weight) * num_classes
+        weights = (weights / total_weight) * no_of_classes
 
     # Convert numpy weights to torch tensor and move to the specified device
-    weights = torch.from_numpy(weights).float().to(device)
+    weight_per_label = torch.from_numpy(weights).float().to(device)
 
-    return weights
-
-
+    # Index weights by labels
+    weight_per_label = weight_per_label[torch.from_numpy(labels).to(device)]
+    
+    return weight_per_label
 
 # Adjust learning rate and betas for Adam Optimizer
 mom1 = 0.9
@@ -465,6 +413,7 @@ def adjust_learning_rate(optimizer, epoch):
     for param_group in optimizer.param_groups:
         param_group['lr']=alpha_plan[epoch]
         param_group['betas']=(beta1_plan[epoch], 0.999) 
+       
 # define drop rate schedule
 def gen_forget_rate(fr_type='type_1'):
     if fr_type=='type_1':
@@ -509,6 +458,43 @@ def accuracy(logit, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
+def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
+    model.train()  # Set model to training mode
+    train_total = 0
+    train_correct = 0
+    total_loss = 0
+
+    for i, (data, labels, _) in enumerate(train_loader):
+        data, labels = data.cuda(), labels.cuda()
+        logits = model(data)
+
+        # Compute the standard CrossEntropyLoss
+        loss = criterion(logits, labels)
+        
+        # Apply weights manually if weight resampling is enabled
+        if args.weight_resampling != 'none':
+            weights = compute_weights(labels, no_of_classes=no_of_classes)
+            loss = (loss * weights).mean() 
+
+        # Backward pass and optimization
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        _, predicted = torch.max(logits.data, 1)
+        train_total += labels.size(0)
+        train_correct += (predicted == labels).sum().item()
+        total_loss += loss.item()
+
+        # if (i + 1) % args.print_freq == 0:
+        #     print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
+        #           % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
+
+    print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
+                  % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
+
+    train_acc = 100. * train_correct / train_total
+    return train_acc
 
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
@@ -552,7 +538,6 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
             
     cleaned_class_names = [clean_class_name(name) for name in index_to_class_name.values()]
     
-
     metrics = {
         'accuracy': accuracy_score(all_labels, all_preds),
         'balanced_accuracy': balanced_accuracy_score(all_labels, all_preds),
@@ -562,7 +547,6 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         'f1_macro': f1_score(all_labels, all_preds, average='macro', zero_division=0),
         'f1_average': np.mean(f1_score(all_labels, all_preds, average=None, zero_division=0))  # Average F1 score
     }
-
 
      # Class accuracy
     if args.dataset == 'CIC_IDS_2017':
@@ -585,7 +569,6 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
             ]) for label in unique_labels
         }
         metrics.update(class_accuracy)
-
 
     if save_conf_matrix:
 
@@ -622,7 +605,6 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         ax.set_yticklabels(tick_labels2, rotation=0)  # Align y-axis labels
         ax.tick_params(left=False, bottom=False, pad=10)
 
-
         # Define Unicode characters for ticks
         unicode_symbol_x = chr(0x25B6)  # Black right-pointing triangle
         unicode_symbol_y = chr(0x25B2)  # Black up-pointing triangle
@@ -634,7 +616,6 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         # Disable original ticks
         ax.tick_params(length=0)  # Hide tick lines
 
-    
         for y in yticks:
             ax.annotate(unicode_symbol_x, xy=(0, y), xycoords='data', xytext=(0, 0), textcoords='offset points', ha='right', va='center', fontsize=12, color='black')
         # Overlay Unicode characters as custom tick marks
@@ -663,7 +644,6 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
 
     return metrics
 
-
 def weights_init(m):
     if isinstance(m, nn.Linear):
         # Apply custom initialization to linear layers
@@ -687,184 +667,9 @@ def handle_inf_nan(features_np):
     scaler = StandardScaler()
     return scaler.fit_transform(features_np)
 
-
-def warmup(epoch, trainloader, model, optimizer):
-    model.train()
-    batch_idx = 0
-    losses = AverageMeter()
-
-    for i, (x, y, _) in enumerate(trainloader):
-        x = x.cuda()
-        y = y.cuda()
-        logits = model(x)
-        
-        optimizer.zero_grad()
-        loss = nn.CrossEntropyLoss()(logits, y)
-        loss.backward()
-        optimizer.step()
-        losses.update(loss.item(), len(logits))
-
-        batch_idx += 1
-
-    print('Epoch [%3d/%3d] Loss: %.2f' % (epoch, args.n_epoch, losses.avg))
-
-
-def mixup_criterion(self, criterion, pred, y_a, y_b, lam):
-        return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
-
-def splite_confident(self, outs, clean_targets, noisy_targets):
-    labeled_indexs = []
-    unlabeled_indexs = []
-
-    if not self.args.use_true_distribution:
-        if self.args.clean_method == 'confidence':
-                for cls in range(self.args.num_class):
-                    idx = np.where(noisy_targets==cls)[0]
-                    loss_cls = outs[idx]
-                    sorted, indices = torch.sort(loss_cls, descending=False)
-                    select_num = int(len(indices) * 0.15)
-                    for i in range(len(indices)):
-                        if i < select_num:
-                            labeled_indexs.append(idx[indices[i].item()])
-                        else:
-                            unlabeled_indexs.append(idx[indices[i].item()])
-    else:
-        sz = noisy_targets.shape[0]
-        for cls in range(self.args.num_class):
-            idx = np.where(noisy_targets == cls)[0]
-            select_num = int(sz * 0.15 * self.dist[cls])
-            cnt = 0
-            for i in range(len(idx)):
-                if noisy_targets[idx[i]] == clean_targets[idx[i]]:
-                    cnt += 1
-                    if cnt <= select_num:
-                        labeled_indexs.append(idx[i])
-                    else:
-                        unlabeled_indexs.append(idx[i])
-                else:
-                        unlabeled_indexs.append(idx[i])
-
-    return labeled_indexs, unlabeled_indexs
-
-def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, model, optimizer, criterion, args, threshold, prev_labels, prev_labels_idx):
-    model.train()
-
-    losses = AverageMeter()
-    losses_x = AverageMeter()
-    losses_u = AverageMeter()
-    losses_s = AverageMeter()
-    
-    # labeled distribution
-    labeled_dist = get_labeled_dist(labeled_dataset).cuda()
-
-    debug_t_list = [AverageMeter() for _ in range(args.num_class * 2)]
-    debug_list = [AverageMeter() for _ in range(args.num_class * 2)]
-
-    for batch_idx, (b_l, b_u, b_imb_l) in enumerate(zip(labeled_loader, unlabeled_loader, imb_labeled_loader)):
-        # Unpack b_l, b_u, b_imb_l
-        xl, yl, _ = b_l
-        xw, xs, given_u = b_u
-        x_imb_l, y_imb_l, _ = b_imb_l
-        
-        # Convert tensors to float32 and move to GPU
-        xl = xl.cuda().float()
-        xw = xw.cuda().float()
-        xs = xs.cuda().float()
-        x_imb_l = x_imb_l.cuda().float()
-        
-        yl = yl.cuda()
-        y_imb_l = y_imb_l.cuda()
-        given_u = given_u.cuda()
-
-        if args.dataset == 'windows_pe_real':
-            if xs.ndim == 2 and xs.shape[1] == 1:
-                xs = xs.view(-1, 1024)
-            elif xs.ndim == 1:
-                xs = xs.unsqueeze(1).repeat(1, 1024)
-
-        elif args.dataset == 'BODMAS':
-            if xs.ndim == 2 and xs.shape[1] == 1:
-                xs = xs.view(-1, 2381)
-            elif xs.ndim == 1:
-                xs = xs.unsqueeze(1).repeat(1, 2381)
-
-        logits_xw = model(xw)
-        logits_xs = model(xs)
-        class_weights = compute_weights(yl, args.num_class)  # Get class weights
-
-        if args.imb_method == 'resample':
-            logits_imb_x = model(x_imb_l)
-            Lx = F.cross_entropy(logits_imb_x, y_imb_l, weight=class_weights, reduction='mean')
-
-        elif args.imb_method == 'mixup':
-            lam = np.random.beta(args.alpha, args.alpha)
-            lam = max(lam, 1 - lam)
-            idx = torch.randperm(xl.size()[0])
-            mix_x = model.forward_encoder(x_imb_l) * lam + (1 - lam) * model.forward_encoder(xl)
-            mix_logits = model.forward_classifier(mix_x)
-            Lx = mixup_criterion(criterion, mix_logits, y_imb_l, yl[idx], lam)
-
-        elif args.imb_method == 'reweight':
-            logits_x = model(xl)
-            Lx = F.cross_entropy(logits_x, yl, weight=class_weights, reduction='mean')
-
-        elif args.imb_method == 'logits':
-            logits_x = model(xl)
-            Lx = F.cross_entropy(logits_x, yl, reduction='mean')
-            logit = logits_x  # Define logit here using logits_x
-
-        if args.use_scl:
-            feat = model.forward_feat(xl)
-            feat = feat.unsqueeze(1)
-            Ls = criterion(feat, yl)
-
-        with torch.no_grad():
-            probs = torch.softmax(logits_xw.detach() / args.T, -1)
-            if args.dist_alignment:
-                model_dist = prev_labels.mean(0)
-                prev_labels[prev_labels_idx] = probs.mean(0)
-                prev_labels_idx = (prev_labels_idx + 1) % args.dist_alignment_batches
-                probs *= (labeled_dist + args.dist_alignment_eps) / (model_dist + args.dist_alignment_eps)
-                probs /= probs.sum(-1, keepdim=True)
-
-            if not args.use_proto:
-                yu = torch.argmax(probs, -1)
-                mask = (-1.0 * torch.log(torch.max(probs, -1)[0]) <= threshold.rho_t).to(dtype=torch.float32)
-            else:
-                yu, mask = refine_pesudo_label(xw, probs, threshold, prototype, model)
-
-        given_u = torch.clamp(given_u, 0, args.num_class - 1)
-
-        if args.use_hard_labels:
-            Lu = (F.cross_entropy(logits_xs, yu, weight=class_weights, reduction='none') * mask).mean()
-        else:
-            one_hot = F.one_hot(given_u, num_classes=args.num_class).float()
-            probs = probs * args.epsilon + (1 - args.epsilon) * one_hot
-            Lu = (ce_loss(logits_xs, probs, use_hard_labels=False, weight=class_weights, reduction='none') * mask).mean()
-
-        if args.use_scl:
-            loss = Lx + args.lambda_u * Lu + args.lambda_s * Ls
-        else:
-            loss = Lx + args.lambda_u * Lu
-
-        optimizer.zero_grad()
-        loss.backward()
-        losses.update(loss.item())
-        losses_x.update(Lx.item())
-        losses_u.update(Lu.item())
-        if args.use_scl:
-            losses_s.update(Ls.item())
-
-        optimizer.step()
-        threshold.update()
-        if args.use_proto:
-            prototype = update_proto(xl, yl, prototype, model)
-    
-    print('Epoch [%3d/%3d] Loss: %.2f' % (epoch, args.n_epoch, losses.avg))
-
-
-
 def main():
+    print(model_str)
+    print(model_str)
     print(model_str)
     label_encoder = LabelEncoder()
 
@@ -994,92 +799,6 @@ def main():
     print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
     print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
     
-    if args.dataset == 'BODMAS':
-        milestones = [5, 30, 60] if args.noise_rate == 0.6 else [30, 60]
-    else:
-        milestones = [10, 60, 90]
-
-    # Dynamically calculate the number of classes
-    args.num_class = len(np.unique(y_train))
-    print(f"Number of classes: {args.num_class}")
-
-    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
-    fold = 0
-
-    # Define a suitable value for gamma
-    gamma = 0.1  # You can adjust this value as needed
-    # Initialize the threshold object with gamma
-    threshold = dynamic_threshold(args.threshold, args.num_class, gamma)  # Initialize the threshold object
-
-    # for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
-    #     if max(train_idx) >= len(noise_or_not) or max(val_idx) >= len(noise_or_not):
-    #         print("IndexError: Index is out of bounds for noise_or_not array.")
-    #         continue
-    #     fold += 1
-    #     X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
-    #     y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
-    #     noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
-
-    #     train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
-    #     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-
-    #     val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))
-    #     val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
-
-    #     model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
-    #     model.apply(weights_init)
-
-    #     # Define the optimizer and criterion after model initialization
-    #     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay_l2)
-    #     criterion = nn.CrossEntropyLoss()
-
-    #     # Initialize the learning rate scheduler
-    #     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.3, last_epoch=-1)
-
-    #     best_acc = 0.0
-
-
-    #     # Create a directory to save the models
-    #     saved_models_dir = os.path.join(results_dir, 'saved_models')
-    #     os.makedirs(saved_models_dir, exist_ok=True)
-
-    #     # Initialize prev_labels and prev_labels_idx
-    #     prev_labels = torch.zeros((args.dist_alignment_batches, args.num_class)).cuda()
-    #     prev_labels_idx = 0
-
-    #     for epoch in range(args.n_epoch):
-    #         if epoch < args.warmup:
-    #             warmup(epoch, train_loader, model, optimizer)
-    #         else:
-    #             labeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-    #             unlabeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-    #             imb_labeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-
-    #             # Ensure prev_labels and prev_labels_idx are passed
-    #             ourmatch_train(epoch, train_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, model, optimizer, criterion, args, threshold, prev_labels, prev_labels_idx)
-
-    #         adjust_learning_rate(optimizer, epoch)  # Adjust learning rate before evaluation
-    #         metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
-
-    #         # Update metrics with Fold and Epoch at the beginning
-    #         row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
-    #         with open(validation_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
-    #             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    #             writer.writerow(row_data)
-
-    #         if metrics['accuracy'] > best_acc:
-    #             best_acc = metrics['accuracy']
-    #             # Save the best model in the created folder
-    #             torch.save(model.state_dict(), os.path.join(saved_models_dir, f"{model_str}_best_model_fold{fold}.pth"))
-
-    #     lr_scheduler.step()  # Step the learning rate scheduler after each epoch
-
-
-    #     print(f"Fold {fold} completed.")
-
-    # print("Training completed.")
-
-
     # Full dataset training
     print("Training on the full dataset...")
     # Prepare the full augmented dataset for training
@@ -1089,22 +808,13 @@ def main():
     # Prepare the full model
     full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
     full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay_l2)
+    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     full_criterion = CrossEntropyLoss()
-
-    # Initialize prev_labels and prev_labels_idx
-    prev_labels = torch.zeros((args.dist_alignment_batches, args.num_class)).cuda()
-    prev_labels_idx = 0
 
     # Train on the full augmented dataset
     print("Training on the full augmented dataset...")
     for epoch in range(args.n_epoch):
-        labeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-        unlabeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-        imb_labeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-
-        # Ensure prev_labels and prev_labels_idx are passed
-        ourmatch_train(epoch, full_train_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, full_model, full_optimizer, full_criterion, args, threshold, prev_labels, prev_labels_idx)
+        train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
 
     # Prepare clean data for evaluation
     clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))

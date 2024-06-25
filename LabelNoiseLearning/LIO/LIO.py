@@ -968,55 +968,55 @@ def main():
     print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
     print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
-    # Cross-validation training
-    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
-    results = []
-    fold = 0
-    for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
-        # print(f"Max train_idx: {max(train_idx)}, Max val_idx: {max(val_idx)}")  # Debug indices
-        if max(train_idx) >= len(noise_or_not) or max(val_idx) >= len(noise_or_not):
-            print("IndexError: Index is out of bounds for noise_or_not array.")
-            continue  
-        fold += 1
-        X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
-        y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
-        noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
+    # # Cross-validation training
+    # skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
+    # results = []
+    # fold = 0
+    # for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
+    #     # print(f"Max train_idx: {max(train_idx)}, Max val_idx: {max(val_idx)}")  # Debug indices
+    #     if max(train_idx) >= len(noise_or_not) or max(val_idx) >= len(noise_or_not):
+    #         print("IndexError: Index is out of bounds for noise_or_not array.")
+    #         continue  
+    #     fold += 1
+    #     X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
+    #     y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
+    #     noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
 
-        train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+    #     train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
+    #     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
-        # Use clean data for validation 
-        val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))  
-        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+    #     # Use clean data for validation 
+    #     val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))  
+    #     val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-        model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
-        model.apply(weights_init)
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        criterion = nn.CrossEntropyLoss()
+    #     model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
+    #     model.apply(weights_init)
+    #     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    #     criterion = nn.CrossEntropyLoss()
 
-        for epoch in range(args.n_epoch):
-            num_classes = len(np.unique(y_train_fold))
-            init_matrix = torch.full((num_classes, num_classes), fill_value=0.1).cuda()  # A small positive value for all elements
-            init_matrix.fill_diagonal_(10.0)  # Higher concentration on the diagonal
+    #     for epoch in range(args.n_epoch):
+    #         num_classes = len(np.unique(y_train_fold))
+    #         init_matrix = torch.full((num_classes, num_classes), fill_value=0.1).cuda()  # A small positive value for all elements
+    #         init_matrix.fill_diagonal_(10.0)  # Higher concentration on the diagonal
 
-            # Betas for decay and update in the DirichletTransition
-            betas = (0.999, 0.01) 
+    #         # Betas for decay and update in the DirichletTransition
+    #         betas = (0.999, 0.01) 
 
-            # Initialize the transition mechanism
-            transition = DirichletTransition(init_matrix=init_matrix, betas=betas)
-            adjust_learning_rate(optimizer, epoch)
-            train_lio(train_loader, model, optimizer, transition, epoch)
-            metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
+    #         # Initialize the transition mechanism
+    #         transition = DirichletTransition(init_matrix=init_matrix, betas=betas)
+    #         adjust_learning_rate(optimizer, epoch)
+    #         train_lio(train_loader, model, optimizer, transition, epoch)
+    #         metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
 
-            # Update metrics with Fold and Epoch at the beginning
-            row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
-            with open(validation_metrics_file, "a", newline='',encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writerow(row_data)
+    #         # Update metrics with Fold and Epoch at the beginning
+    #         row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
+    #         with open(validation_metrics_file, "a", newline='',encoding='utf-8') as csvfile:
+    #             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    #             writer.writerow(row_data)
 
-    print("Training completed. Results from all folds:")
-    for i, result in enumerate(results, 1):
-        print(f'Results Fold {i}:', result)
+    # print("Training completed. Results from all folds:")
+    # for i, result in enumerate(results, 1):
+    #     print(f'Results Fold {i}:', result)
 
     # Full dataset training with LIO
     print("Training on the full dataset...")

@@ -76,62 +76,62 @@ do
         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_9$
     done
 
-    # Experiment 10: Multiplicative noise
-    for mult_noise_level in "${mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_10$
-    done
+    # # Experiment 10: Multiplicative noise
+    # for mult_noise_level in "${mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_10$
+    # done
 
-    # Experiment 11: Combination of additive and multiplicative noise
-    for add_noise_level in "${add_noise_levels[@]}"; do
-        for mult_noise_level in "${mult_noise_levels[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_11$
-        done
-    done
+    # # Experiment 11: Combination of additive and multiplicative noise
+    # for add_noise_level in "${add_noise_levels[@]}"; do
+    #     for mult_noise_level in "${mult_noise_levels[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_11$
+    #     done
+    # done
 
-    # Experiment 12: Label noise and additive noise
-    for noise_rate in "${noise_rates[@]}"; do
-        for add_noise_level in "${add_noise_levels[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_12$
-        done
-    done
+    # # Experiment 12: Label noise and additive noise
+    # for noise_rate in "${noise_rates[@]}"; do
+    #     for add_noise_level in "${add_noise_levels[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_12$
+    #     done
+    # done
 
-    # Experiment 13: Label noise and multiplicative noise
-    for noise_rate in "${noise_rates[@]}"; do
-        for mult_noise_level in "${mult_noise_levels[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_13$
-        done
-    done
+    # # Experiment 13: Label noise and multiplicative noise
+    # for noise_rate in "${noise_rates[@]}"; do
+    #     for mult_noise_level in "${mult_noise_levels[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_13$
+    #     done
+    # done
 
         # Experiment 14: Additive noise with L2 regularization
     for add_noise_level in "${add_noise_levels[@]}"; do
         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_14$
     done
 
-    # Experiment 15: Multiplicative noise with L2 regularization
-    for mult_noise_level in "${mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_15$
-    done
+    # # Experiment 15: Multiplicative noise with L2 regularization
+    # for mult_noise_level in "${mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_15$
+    # done
 
-    # Experiment 16: Combination of additive and multiplicative noise with L2 regularization
-    for add_noise_level in "${add_noise_levels[@]}"; do
-        for mult_noise_level in "${mult_noise_levels[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_16$
-        done
-    done
+    # # Experiment 16: Combination of additive and multiplicative noise with L2 regularization
+    # for add_noise_level in "${add_noise_levels[@]}"; do
+    #     for mult_noise_level in "${mult_noise_levels[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_16$
+    #     done
+    # done
 
-    # Experiment 17: Label noise and additive noise with L2 regularization
-    for noise_rate in "${noise_rates[@]}"; do
-        for add_noise_level in "${add_noise_levels[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_17$
-        done
-    done
+    # # Experiment 17: Label noise and additive noise with L2 regularization
+    # for noise_rate in "${noise_rates[@]}"; do
+    #     for add_noise_level in "${add_noise_levels[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --feature_add_noise_level ${add_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_17$
+    #     done
+    # done
 
-    # Experiment 18: Label noise and multiplicative noise with L2 regularization
-    for noise_rate in "${noise_rates[@]}"; do
-        for mult_noise_level in "${mult_noise_levels[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_18$
-        done
-    done
+    # # Experiment 18: Label noise and multiplicative noise with L2 regularization
+    # for noise_rate in "${noise_rates[@]}"; do
+    #     for mult_noise_level in "${mult_noise_levels[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --feature_mult_noise_level ${mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_18$
+    #     done
+    # done
 
 
   done

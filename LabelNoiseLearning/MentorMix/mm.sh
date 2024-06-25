@@ -3,7 +3,7 @@ noise_rates=(0 0.1 0.3 0.6)
 imbalance_ratios=(0 0.05 0.01)
 noise_types=("uniform" "class" "feature" "MIMICRY")
 data_augmentations=("none" "undersampling" "oversampling" "smote" "adasyn")
-weight_resamplings=("none" "Class-Balance" "Focal" "Naive")
+weight_resamplings=("Class-Balance" "Focal" "Naive")
 add_noise_levels=(0.0 0.3 0.6 1.0)
 mult_noise_levels=(0.0 0.3 0.6 1.0)
 
