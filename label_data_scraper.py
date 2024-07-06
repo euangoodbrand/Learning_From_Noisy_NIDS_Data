@@ -3,22 +3,65 @@ import csv
 import re
 from pathlib import Path
 from collections import defaultdict
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def extract_experiment_details(filename):
     details = {}
     parts = filename.split('_')
+    
+    # Initialize default values
+    details['weight_resampling'] = 'None'
+    details['data_augmentation'] = 'None'
+    details['noise_type'] = 'N/A'
+    details['noise_level'] = 'N/A'
+    details['imbalance_ratio'] = 'N/A'
+    details['add_noise'] = 'N/A'
+    details['mult_noise'] = 'N/A'
+
+    # Extract technique and dataset
+    details['technique'] = parts[0]
+    details['dataset'] = parts[1]
+
+    # Extract data augmentation
+    if 'no_augmentation' in parts:
+        details['data_augmentation'] = 'None'
+    else:
+        for aug in ['undersampling', 'oversampling', 'smote', 'adasyn']:
+            if aug in parts:
+                details['data_augmentation'] = aug
+                break
+
+    # Extract noise type and level
     for part in parts:
-        if 'noise' in part:
-            details['noise_level'] = part.split('noise')[-1]
-        elif 'imbalance' in part:
-            details['imbalance_ratio'] = part.split('imbalance')[-1]
-        elif part in ['uniform', 'class', 'feature', 'MIMICRY']:
-            details['noise_type'] = part
-        elif part in ['undersampling', 'oversampling', 'smote', 'adasyn']:
-            details['data_augmentation'] = part
-        elif 'weight_resampling' in part:
-            details['weight_resampling'] = part.split('weight_resampling')[-1]
+        if '-noise' in part:
+            noise_parts = part.split('-noise')
+            details['noise_type'] = noise_parts[0]
+            details['noise_level'] = noise_parts[1]
+
+    # Extract imbalance ratio
+    for part in parts:
+        if 'imbalance' in part:
+            details['imbalance_ratio'] = part.split('imbalance')[1]
+
+    # Extract add and mult noise
+    for part in parts:
+        if 'addNoise' in part:
+            details['add_noise'] = part.split('addNoise')[1]
+        if 'multNoise' in part:
+            details['mult_noise'] = part.split('multNoise')[1]
+
+    # Extract weight resampling
+    for part in parts:
+        if part in ['Class-Balance', 'Focal', 'Naive']:
+            details['weight_resampling'] = part
+        elif part == 'no_weight_resampling':
+            details['weight_resampling'] = 'None'
+
     return details
+
+# The rest of the script remains the same
 
 def process_csv_file(file_path, technique, dataset, experiment_num):
     try:
@@ -41,11 +84,11 @@ def process_csv_file(file_path, technique, dataset, experiment_num):
                     details.get('weight_resampling', 'N/A')
                 ])
                 
-                print(f"Processed file: {file_path}")
-                print(f"Result: {result}")
+                logging.info(f"Processed file: {file_path}")
+                logging.debug(f"Result: {result}")
                 return result
     except Exception as e:
-        print(f"Error processing file {file_path}: {e}")
+        logging.error(f"Error processing file {file_path}: {e}")
     return None
 
 def process_directory(root_dir):
@@ -59,11 +102,11 @@ def process_directory(root_dir):
             if technique == 'E_ANRN':
                 continue  # Skip E_ANRN
             all_techniques.add(technique)
-            print(f"Processing technique: {technique}")
+            logging.info(f"Processing technique: {technique}")
             
             results_dir = technique_dir / 'results'
             if not results_dir.exists():
-                print(f"No results directory found for {technique}")
+                logging.warning(f"No results directory found for {technique}")
                 continue
             
             # Group experiment folders
@@ -82,14 +125,14 @@ def process_directory(root_dir):
                     if exp_num > 8:
                         continue  # Skip experiments beyond 8
                     
-                    print(f"Processing experiment: {exp_dir.name}")
+                    logging.info(f"Processing experiment: {exp_dir.name}")
                     for dataset_dir in exp_dir.iterdir():
                         if dataset_dir.is_dir() and dataset_dir.name in ['BODMAS', 'windows_pe_real', 'CIC_IDS_2017']:
                             dataset = dataset_dir.name
-                            print(f"Processing dataset: {dataset}")
+                            logging.info(f"Processing dataset: {dataset}")
                             
-                            if technique == 'Bootstrapping' and dataset == 'BODMAS':
-                                # Handle Bootstrap soft/hard for BODMAS
+                            if technique == 'Bootstrapping':
+                                # Handle Bootstrap soft/hard
                                 for bootstrap_type in ['hard', 'soft']:
                                     bootstrap_dir = dataset_dir / bootstrap_type
                                     if bootstrap_dir.exists():
@@ -98,27 +141,27 @@ def process_directory(root_dir):
                                             if 'validation' not in csv_file.name.lower():
                                                 result = process_csv_file(csv_file, f'Bootstrapping_{bootstrap_type}', dataset, exp_num)
                                                 if result:
-                                                    key = (result[6], result[7])  # noise_level, imbalance_ratio
+                                                    key = tuple(result[6:11])  # Use all experiment details as key
                                                     results[exp_num][key].append(result)
                                                     processed_techniques.add(f'Bootstrapping_{bootstrap_type}')
                             else:
                                 # Search for CSV files in the dataset directory and its subdirectories
                                 csv_files = list(dataset_dir.rglob('*full_dataset*.csv'))
-                                print(f"Found {len(csv_files)} CSV files in {dataset_dir}")
+                                logging.info(f"Found {len(csv_files)} CSV files in {dataset_dir}")
                                 
                                 for csv_file in csv_files:
                                     if 'validation' not in csv_file.name.lower():
-                                        print(f"Processing file: {csv_file}")
+                                        logging.debug(f"Processing file: {csv_file}")
                                         
                                         result = process_csv_file(csv_file, technique, dataset, exp_num)
                                         if result:
-                                            key = (result[6], result[7])  # noise_level, imbalance_ratio
+                                            key = tuple(result[6:11])  # Use all experiment details as key
                                             results[exp_num][key].append(result)
                                             processed_techniques.add(technique)
                 except ValueError as e:
-                    print(f"Error processing directory {exp_dir}: {e}")
+                    logging.error(f"Error processing directory {exp_dir}: {e}")
     
-    # For CoTeaching, keep only the first result for each noise/imbalance combination
+    # For CoTeaching, keep only the first result for each combination
     final_results = defaultdict(list)
     for exp_num, exp_results in results.items():
         for key, value_list in exp_results.items():
@@ -127,23 +170,23 @@ def process_directory(root_dir):
             else:
                 final_results[exp_num].extend(value_list)
     
-    print("All techniques found:", all_techniques)
-    print("Techniques processed and saved:", processed_techniques)
-    print("Missing techniques:", all_techniques - processed_techniques)
+    logging.info("All techniques found: %s", all_techniques)
+    logging.info("Techniques processed and saved: %s", processed_techniques)
+    logging.info("Missing techniques: %s", all_techniques - processed_techniques)
     
     return final_results
 
 def write_results_to_csv(results, output_dir):
     for exp_num, data in results.items():
         if not data:
-            print(f"No data to write for experiment {exp_num}")
+            logging.warning(f"No data to write for experiment {exp_num}")
             continue
         
         output_file = output_dir / f'experiment_{exp_num}_results.csv'
         
         try:
-            # Sort the data based on Technique, Dataset, Noise Level, and Imbalance Ratio
-            sorted_data = sorted(data, key=lambda x: (x[0], x[1], x[6], x[7]))
+            # Sort the data based on all columns
+            sorted_data = sorted(data, key=lambda x: x)
             
             with open(output_file, 'w', newline='') as f:
                 writer = csv.writer(f)
@@ -154,9 +197,9 @@ def write_results_to_csv(results, output_dir):
                 writer.writerow(headers)
                 writer.writerows(sorted_data)
             
-            print(f"Results for experiment {exp_num} written to {output_file}")
+            logging.info(f"Results for experiment {exp_num} written to {output_file}")
         except Exception as e:
-            print(f"Error writing results to {output_file}: {e}")
+            logging.error(f"Error writing results to {output_file}: {e}")
 
 def main():
     current_dir = Path.cwd()
@@ -164,13 +207,13 @@ def main():
     output_dir = current_dir / 'output_label'
     output_dir.mkdir(exist_ok=True)
     
-    print(f"Starting processing of directory: {root_dir}")
-    print(f"Output will be saved to: {output_dir}")
+    logging.info(f"Starting processing of directory: {root_dir}")
+    logging.info(f"Output will be saved to: {output_dir}")
     
     results = process_directory(root_dir)
     write_results_to_csv(results, output_dir)
     
-    print(f"Processing complete. All output files are in: {output_dir}")
+    logging.info(f"Processing complete. All output files are in: {output_dir}")
 
 if __name__ == "__main__":
     main()

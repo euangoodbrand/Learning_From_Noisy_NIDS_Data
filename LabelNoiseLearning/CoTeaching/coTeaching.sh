@@ -60,16 +60,16 @@ do
     #     done
     # done
 
-    # Experiment 8 coTeaching, windows PE, all combinations of noise rate, noise type, and imbalance ratios with sample re-weighting techniques
-    # for weight_resampling in "${weight_resamplings[@]}"; do
-    #   for noise_rate in "${noise_rates[@]}"; do
-    #     for noise_type in "${noise_types[@]}"; do
-    #       for imbalance_ratio in "${imbalance_ratios[@]}"; do
-    #         CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level ${feature_add_noise_level} --feature_mult_noise_level ${feature_mult_noise_level} --result_dir results/experiment_8$
-    #       done
-    #     done
-    #   done
-    # done
+    Experiment 8 coTeaching, windows PE, all combinations of noise rate, noise type, and imbalance ratios with sample re-weighting techniques
+    for weight_resampling in "${weight_resamplings[@]}"; do
+      for noise_rate in "${noise_rates[@]}"; do
+        for noise_type in "${noise_types[@]}"; do
+          for imbalance_ratio in "${imbalance_ratios[@]}"; do
+            CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_8$
+          done
+        done
+      done
+    done
 
     # # New experiments with feature additive noise
     # for add_noise_level in "${add_noise_levels[@]}"; do
@@ -114,26 +114,26 @@ do
     #   CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level 0 --feature_mult_noise_level ${mult_noise_level} --weight_decay 0.01 --result_dir results/experiment_15$
     # done
 
-    # Experiment 16 coTeaching, feature additive and multiplicative noise combinations with L2 regularization
-    for add_noise_level in "${add_noise_levels[@]}"; do
-      for mult_noise_level in "${mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --weight_decay 0.01 --result_dir results/experiment_16$
-      done
-    done
+    # # Experiment 16 coTeaching, feature additive and multiplicative noise combinations with L2 regularization
+    # for add_noise_level in "${add_noise_levels[@]}"; do
+    #   for mult_noise_level in "${mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --weight_decay 0.01 --result_dir results/experiment_16$
+    #   done
+    # done
 
-    # Experiment 17 coTeaching, label noise with feature additive noise and L2 regularization
-    for noise_rate in "${noise_rates[@]}"; do
-      for add_noise_level in "${add_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0 --weight_decay 0.01 --result_dir results/experiment_17$
-      done
-    done
+    # # Experiment 17 coTeaching, label noise with feature additive noise and L2 regularization
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for add_noise_level in "${add_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0 --weight_decay 0.01 --result_dir results/experiment_17$
+    #   done
+    # done
 
-    # Experiment 18 coTeaching, label noise with feature multiplicative noise and L2 regularization
-    for noise_rate in "${noise_rates[@]}"; do
-      for mult_noise_level in "${mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level 0 --feature_mult_noise_level ${mult_noise_level} --weight_decay 0.01 --result_dir results/experiment_18$
-      done
-    done
+    # # Experiment 18 coTeaching, label noise with feature multiplicative noise and L2 regularization
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for mult_noise_level in "${mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level 0 --feature_mult_noise_level ${mult_noise_level} --weight_decay 0.01 --result_dir results/experiment_18$
+    #   done
+    # done
 
   done
 done

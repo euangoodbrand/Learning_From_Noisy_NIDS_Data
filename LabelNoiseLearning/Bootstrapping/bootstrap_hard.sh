@@ -60,80 +60,80 @@ do
     #     done
     # done
 
-    # # Experiment 8 bootstrapping, windows PE, all combinations of noise rate, noise type, and imbalance  ratios with sample re-weighting techniques
-    # for weight_resampling in "${weight_resamplings[@]}"; do
-    #   for noise_rate in "${noise_rates[@]}"; do
-    #     for noise_type in "${noise_types[@]}"; do
-    #       for imbalance_ratio in "${imbalance_ratios[@]}"; do
-    #         CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --data_augmentation ${data_augmentation} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir ${result_dir}
-    #       done
-    #     done
+    # Experiment 8 bootstrapping, windows PE, all combinations of noise rate, noise type, and imbalance  ratios with sample re-weighting techniques
+    for weight_resampling in "${weight_resamplings[@]}"; do
+      for noise_rate in "${noise_rates[@]}"; do
+        for noise_type in "${noise_types[@]}"; do
+          for imbalance_ratio in "${imbalance_ratios[@]}"; do
+            CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_8
+          done
+        done
+      done
+    done
+
+    # # Experiment 9 bootstrapping, feature additive noise
+    # for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #   CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --feature_add_noise_level ${feature_add_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_9$
+    # done
+
+    # # Experiment 10 bootstrapping, feature multiplicative noise
+    # for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #   CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_10$
+    # done
+
+    # # Experiment 11 bootstrapping, feature additive and multiplicative noise combinations
+    # for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #   for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --feature_add_noise_level ${feature_add_noise_level} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_11$
     #   done
     # done
 
-    # Experiment 9 bootstrapping, feature additive noise
-    for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
-      CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --feature_add_noise_level ${feature_add_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_9$
-    done
+    # # Experiment 12 bootstrapping, label noise with feature additive noise
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --noise_rate ${noise_rate} --feature_add_noise_level ${feature_add_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_12$
+    #   done
+    # done
 
-    # Experiment 10 bootstrapping, feature multiplicative noise
-    for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-      CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_10$
-    done
+    # # Experiment 13 bootstrapping, label noise with feature multiplicative noise
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --noise_rate ${noise_rate} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_13$
+    #   done
+    # done
 
-    # Experiment 11 bootstrapping, feature additive and multiplicative noise combinations
-    for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
-      for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --feature_add_noise_level ${feature_add_noise_level} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_11$
-      done
-    done
+    # # New Experiments with L2 Regularization
 
-    # Experiment 12 bootstrapping, label noise with feature additive noise
-    for noise_rate in "${noise_rates[@]}"; do
-      for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --noise_rate ${noise_rate} --feature_add_noise_level ${feature_add_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_12$
-      done
-    done
+    # # Experiment 14 bootstrapping, feature additive noise with L2 regularization
+    # for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #   CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${feature_add_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_14$
+    # done
 
-    # Experiment 13 bootstrapping, label noise with feature multiplicative noise
-    for noise_rate in "${noise_rates[@]}"; do
-      for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --weight_decay 0.0 --model_type ${model_type} --noise_rate ${noise_rate} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_13$
-      done
-    done
+    # # Experiment 15 bootstrapping, feature multiplicative noise with L2 regularization
+    # for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #   CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_15$
+    # done
 
-    # New Experiments with L2 Regularization
+    # # Experiment 16 bootstrapping, feature additive and multiplicative noise combinations with L2 regularization
+    # for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #   for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${feature_add_noise_level} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_16$
+    #   done
+    # done
 
-    # Experiment 14 bootstrapping, feature additive noise with L2 regularization
-    for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
-      CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${feature_add_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_14$
-    done
+    # # Experiment 17 bootstrapping, label noise with feature additive noise with L2 regularization
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --noise_rate ${noise_rate} --feature_add_noise_level ${feature_add_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_17$
+    #   done
+    # done
 
-    # Experiment 15 bootstrapping, feature multiplicative noise with L2 regularization
-    for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-      CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_15$
-    done
-
-    # Experiment 16 bootstrapping, feature additive and multiplicative noise combinations with L2 regularization
-    for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
-      for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${feature_add_noise_level} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_16$
-      done
-    done
-
-    # Experiment 17 bootstrapping, label noise with feature additive noise with L2 regularization
-    for noise_rate in "${noise_rates[@]}"; do
-      for feature_add_noise_level in "${feature_add_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --noise_rate ${noise_rate} --feature_add_noise_level ${feature_add_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_17$
-      done
-    done
-
-    # Experiment 18 bootstrapping, label noise with feature multiplicative noise with L2 regularization
-    for noise_rate in "${noise_rates[@]}"; do
-      for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --noise_rate ${noise_rate} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_18$
-      done
-    done
+    # # Experiment 18 bootstrapping, label noise with feature multiplicative noise with L2 regularization
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for feature_mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python bootstrapping.py --dataset windows_pe_real --model_type ${model_type} --noise_rate ${noise_rate} --feature_mult_noise_level ${feature_mult_noise_level} --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_18$
+    #   done
+    # done
 
   done
 done
