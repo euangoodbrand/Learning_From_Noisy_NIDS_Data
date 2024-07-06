@@ -1,102 +1,86 @@
+import os
+import io
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import os
 
-# Load the CSV file
-file_path = 'data/New Experiments - Combined (1).csv'
-data = pd.read_csv(file_path)
+NOISE_COLUMNS = ["Label Noise", "Additive Noise", "Multiplicative Noise"]
+TECHNIQUE_ORDER = ["Baseline", "Bootstrapping Hard", "Bootstrapping Soft", "CoTeaching", "ELR", "GCE", "LRT", "LIO", "MentorMix", "Morse", "NoiseAdaptation"]
 
-# Create a directory to save the plots
-output_dir = 'data/experiment_plots'
-os.makedirs(output_dir, exist_ok=True)
-
-# Clean the data and reformat it
-experiments = {}
-experiment_names = [col for col in data.columns if 'Experiment' in col]
-
-# Experiment descriptions for better plot titles
-experiment_titles = {
-    '': 'Additive Noise Levels',
-    '': 'Multiplicative Noise Levels',
-    '': 'Additive and Multiplicative Noise',
-    '': 'Label and Additive Noise',
-    '': 'Label and Multiplicative Noise',
-    '': 'Additive Noise with L2',
-    '': 'Multiplicative Noise with L2',
-    '': 'Additive and Multiplicative Noise with L2',
-    '': 'Label and Additive Noise with L2',
-    '': 'Label and Multiplicative Noise with L2'
+NOISE_LEVELS_MAPPING = {
+    0.0: "None",
+    0.1: "Very Low",
+    0.3: "Low",
+    0.6: "Medium",
+    1.0: "High"
 }
 
-# Loop through each experiment and extract data
-for experiment_name in experiment_names:
-    start_col = data.columns.get_loc(experiment_name)
-    end_col = start_col + 4  # Assuming each experiment block spans 4 columns
-    experiment_data = data.iloc[:, start_col:end_col]
+def process_csv(file_content):
+    df = pd.read_csv(io.StringIO(file_content))
+    actual_noise_columns = [col for col in NOISE_COLUMNS if col in df.columns]
     
-    # Drop empty columns and rows
-    experiment_data = experiment_data.dropna(axis=1, how='all').dropna(axis=0, how='all')
+    # Remove duplicate rows based on 'Technique' and noise columns
+    df = df.drop_duplicates(subset=['Technique'] + actual_noise_columns)
     
-    # Check if the dataframe is empty after dropping NaNs
-    if experiment_data.empty:
-        continue
+    # Convert Accuracy and F1 Score columns to numeric, coercing errors to NaN
+    df['Accuracy'] = pd.to_numeric(df['Accuracy'], errors='coerce')
+    df['F1 Score'] = pd.to_numeric(df['F1 Score'], errors='coerce')
     
-    # Set the first row as the header
-    experiment_data.columns = experiment_data.iloc[0]
-    experiment_data = experiment_data[1:]
+    # Map additive and multiplicative noise levels to descriptive labels
+    for noise_col in actual_noise_columns:
+        if noise_col in df.columns and noise_col != "Label Noise":
+            df[noise_col] = df[noise_col].map(NOISE_LEVELS_MAPPING).fillna(df[noise_col])
     
-    # Melt the dataframe for easier plotting
-    experiment_data = experiment_data.melt(id_vars='Technique', var_name='Metric', value_name='Value')
-    experiment_data['Value'] = pd.to_numeric(experiment_data['Value'], errors='coerce')
+    # Remove rows with NaN values in Accuracy or F1 Score
+    df = df.dropna(subset=['F1 Score'])
     
-    experiments[experiment_name] = experiment_data.dropna()
+    # Ensure consistent technique order
+    df['Technique'] = pd.Categorical(df['Technique'], categories=TECHNIQUE_ORDER, ordered=True)
+    df = df.sort_values('Technique')
+    
+    return df, actual_noise_columns
 
-# Function to calculate standard deviation
-def calculate_std(df):
-    std_df = df.groupby(['Technique', 'Metric'])['Value'].std().reset_index()
-    std_df = std_df.rename(columns={'Value': 'Std'})
-    return std_df
-
-# Function to plot data
-def plot_experiment_data(experiment_name, df):
-    plt.figure(figsize=(10, 6))  # Standard figure size for all plots
-    ax = sns.barplot(data=df, x='Technique', y='Value', hue='Metric', ci=None, palette='viridis')
+def create_heatmap(df, noise_columns, output_dir, filename):
+    pivot_table = df.pivot_table(values='F1 Score', index='Technique', columns=noise_columns, aggfunc='mean')
     
-    # Add error bars
-    for i in range(len(ax.patches)):
-        bar = ax.patches[i]
-        width = bar.get_width()
-        height = bar.get_height()
-        x = bar.get_x()
-        y = bar.get_y()
-        technique = df['Technique'].unique()[i // 2]  # Assumes two metrics
-        metric = df['Metric'].unique()[i % 2]
-        std = df[(df['Technique'] == technique) & (df['Metric'] == metric)]['Std'].values[0]
-        ax.errorbar(x + width / 2, height, yerr=std, fmt='none', c='black', capsize=5)
+    plt.figure(figsize=(15, 10))
+    sns.heatmap(pivot_table, annot=True, fmt='.2f', cmap='viridis', linewidths=.5, cbar_kws={'label': 'F1 Score'}, annot_kws={'fontsize': 12})
     
-    plt.title(f'Performance Metrics for {experiment_titles.get(experiment_name, experiment_name)}', fontsize=16)
-    plt.xlabel('Technique', fontsize=14)
-    plt.ylabel('Value', fontsize=14)
-    plt.xticks(rotation=45, fontsize=12, ha='right')  # Adjusted rotation and alignment for readability
-    plt.yticks(fontsize=12)
-    plt.ylim(0, 1)  # Ensuring the y-axis starts at 0
-    plt.legend(title='Metric', fontsize=12)
+    noise_types = ", ".join(noise_columns)
+    plt.xlabel(f'Noise Levels ({noise_types})', fontsize=16)
+    plt.ylabel('Technique', fontsize=16)
+    plt.xticks(rotation=45, ha='right', fontsize=14)
+    plt.yticks(fontsize=14)
+    
+    # Adjust colorbar font size
+    cbar = plt.gcf().axes[-1]
+    cbar.tick_params(labelsize=14)
+    cbar.set_ylabel('F1 Score', fontsize=16)
+    
     plt.tight_layout()
-    plt.savefig(f'{output_dir}/{experiment_titles.get(experiment_name, experiment_name)}.png')
+    plt.savefig(os.path.join(output_dir, f'{filename}_heatmap.png'), bbox_inches='tight', dpi=300)
     plt.close()
 
-# Process and plot each experiment
-for experiment_name, df in experiments.items():
-    try:
-        if df.empty:
-            print(f"No valid data for {experiment_name}. Skipping...")
-            continue
-        std_data = calculate_std(df)
-        df = df.merge(std_data, on=['Technique', 'Metric'])
-        plot_experiment_data(experiment_name, df)
-    except Exception as e:
-        print(f"Error processing {experiment_name}: {e}")
+def process_directory(directory, output_dir):
+    for filename in os.listdir(directory):
+        if filename.endswith('.csv'):
+            file_path = os.path.join(directory, filename)
+            print(f"Processing file: {file_path}")
+            with open(file_path, 'r') as file:
+                file_content = file.read()
+            df, noise_columns = process_csv(file_content)
+            
+            if noise_columns:  # Check if there are any noise columns present
+                create_heatmap(df, noise_columns, output_dir, filename)
 
-# Output the directory where plots are saved
-output_dir
+# Main execution
+one_noise_dir = r'mnt\data\one_noise_type'
+two_noise_dir = r'mnt\data\two_noise_type'
+output_dir = r'mnt\data\output'
+
+os.makedirs(output_dir, exist_ok=True)
+
+process_directory(one_noise_dir, output_dir)
+process_directory(two_noise_dir, output_dir)
+
+print("Heatmaps have been generated and saved in the output directory.")

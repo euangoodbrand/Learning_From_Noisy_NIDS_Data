@@ -1,0 +1,37 @@
+\begin{table}[ht]
+\centering
+\caption{Results for Experiment 2}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccccccccccccccc}
+\hline
+\textbf{Technique} & \multicolumn{4}{c}{\textbf{Noise Level 0.0}} & \multicolumn{4}{c}{\textbf{Noise Level 0.1}} & \multicolumn{4}{c}{\textbf{Noise Level 0.3}} & \multicolumn{4}{c}{\textbf{Noise Level 0.6}} \\
+\cline{2-17}
+\textbf{ } & \textbf{Acc} & \textbf{Prec} & \textbf{Rec} & \textbf{F1} & \textbf{Acc} & \textbf{Prec} & \textbf{Rec} & \textbf{F1} & \textbf{Acc} & \textbf{Prec} & \textbf{Rec} & \textbf{F1} & \textbf{Acc} & \textbf{Prec} & \textbf{Rec} & \textbf{F1} \\
+\hline
+Baseline & 0.95 & 0.91 & 0.87 & 0.88 & 0.93 & 0.84 & 0.85 & 0.84 & 0.89 & 0.76 & 0.82 & 0.78 & 0.74 & 0.54 & 0.62 & 0.55 \\
+morse & 0.95 & 0.94 & 0.84 & 0.86 & 0.93 & 0.84 & 0.82 & 0.83 & 0.90 & 0.75 & 0.82 & 0.78 & 0.80 & 0.61 & 0.67 & 0.62 \\
+\hline
+\multicolumn{17}{l}{\textbf{Label Sanitisation}} \\
+\hline
+Bootstrap (hard) & 0.95 & 0.91 & 0.87 & 0.88 & 0.93 & 0.85 & 0.85 & 0.85 & 0.88 & 0.72 & 0.81 & 0.75 & 0.74 & 0.53 & 0.59 & 0.53 \\
+Bootstrap (soft) & 0.95 & 0.91 & 0.87 & 0.88 & 0.94 & 0.86 & 0.87 & 0.86 & 0.89 & 0.75 & 0.83 & 0.78 & 0.74 & 0.54 & 0.64 & 0.56 \\
+LRT & 0.95 & 0.90 & 0.89 & 0.90 & 0.95 & 0.88 & 0.86 & 0.86 & 0.90 & 0.76 & 0.80 & 0.78 & 0.78 & 0.59 & 0.69 & 0.61 \\
+\hline
+\multicolumn{17}{l}{\textbf{Loss Robustification}} \\
+\hline
+ELR & 0.95 & 0.90 & 0.88 & 0.89 & 0.93 & 0.84 & 0.87 & 0.85 & 0.88 & 0.73 & 0.79 & 0.75 & 0.72 & 0.52 & 0.59 & 0.53 \\
+GCE & 0.96 & 0.87 & 0.87 & 0.87 & 0.95 & 0.86 & 0.87 & 0.86 & 0.93 & 0.81 & 0.85 & 0.82 & 0.78 & 0.59 & 0.64 & 0.59 \\
+\hline
+\multicolumn{17}{l}{\textbf{Noise Matrix Estimation}} \\
+\hline
+LIO & 0.94 & 0.90 & 0.90 & 0.90 & 0.93 & 0.84 & 0.90 & 0.87 & 0.88 & 0.75 & 0.82 & 0.78 & 0.74 & 0.56 & 0.66 & 0.58 \\
+NoiseAdaptation & 0.95 & 0.90 & 0.88 & 0.89 & 0.93 & 0.84 & 0.85 & 0.84 & 0.84 & 0.69 & 0.72 & 0.70 & 0.69 & 0.51 & 0.51 & 0.48 \\
+\hline
+\multicolumn{17}{l}{\textbf{Sample Selection}} \\
+\hline
+CoTeaching & 0.95 & 0.87 & 0.82 & 0.83 & 0.95 & 0.86 & 0.85 & 0.86 & 0.94 & 0.83 & 0.85 & 0.84 & 0.92 & 0.78 & 0.79 & 0.77 \\
+MentorMix & 0.95 & 0.86 & 0.87 & 0.87 & 0.95 & 0.85 & 0.85 & 0.85 & 0.94 & 0.82 & 0.82 & 0.82 & 0.85 & 0.66 & 0.69 & 0.67 \\
+\hline
+\end{tabular}
+}
+\end{table}
