@@ -40,6 +40,7 @@ import torch.optim as optim
 import torch.nn.init as init
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+import torch.multiprocessing as mp
 
 # Set the device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -85,15 +86,18 @@ if device.type == 'cuda':
 
 class SimCLRDataset(Dataset):
     def __init__(self, features, labels, transform=None):
-        self.features = features
-        self.labels = labels
+        self.features = torch.tensor(features, dtype=torch.float32).to(device)
+        self.labels = torch.tensor(labels).to(device)
         self.transform = transform
 
     def __getitem__(self, index):
-        feature = torch.tensor(self.features[index], dtype=torch.float32)
+        feature = self.features[index]
         if self.transform:
             feature_1 = self.transform(feature, augmentation_type='weak')
             feature_2 = self.transform(feature, augmentation_type='strong')
+            # Ensure both feature_1 and feature_2 have the same shape as the original feature
+            feature_1 = feature_1[:len(feature)]
+            feature_2 = feature_2[:len(feature)]
         else:
             feature_1, feature_2 = feature, feature
         label = self.labels[index]
@@ -126,20 +130,12 @@ class TabularAugmentation:
         self.noise_level_strong = noise_level_strong
 
     def apply_weak_augmentation(self, x):
-        noise = torch.randn_like(x) * self.noise_level_weak
+        noise = torch.randn_like(x, device=x.device) * self.noise_level_weak
         return x + noise
 
     def apply_strong_augmentation(self, x):
-        noise = torch.randn_like(x) * self.noise_level_strong
-        augmented_data = x + noise
-
-        # Duplicate some rows with additional noise as strong augmentation
-        synthetic_data = augmented_data[torch.randint(len(augmented_data), (int(len(augmented_data) * 0.2),))]
-        synthetic_noise = torch.randn_like(synthetic_data) * self.noise_level_strong
-        synthetic_data += synthetic_noise
-
-        augmented_data = torch.cat([augmented_data, synthetic_data], dim=0)
-        return augmented_data
+        noise = torch.randn_like(x, device=x.device) * self.noise_level_strong
+        return x + noise
 
     def __call__(self, x, augmentation_type='weak'):
         if augmentation_type == 'weak':
@@ -148,8 +144,7 @@ class TabularAugmentation:
             return self.apply_strong_augmentation(x)
         else:
             raise ValueError("Invalid augmentation type. Choose 'weak' or 'strong'.")
-
-
+        
 # Hyper Parameters
 if args.dataset == "CIC_IDS_2017":
     batch_size = 256
@@ -166,12 +161,12 @@ elif args.dataset == "BODMAS":
 
 class SimCLRDataset(Dataset):
     def __init__(self, features, labels, transform=None):
-        self.features = features
-        self.labels = labels
+        self.features = torch.tensor(features, dtype=torch.float32)  # Remove .to(device)
+        self.labels = torch.tensor(labels)  # Remove .to(device)
         self.transform = transform
 
     def __getitem__(self, index):
-        feature = torch.tensor(self.features[index], dtype=torch.float32).to(device)
+        feature = self.features[index]
         if self.transform:
             feature_1 = self.transform(feature, augmentation_type='weak')
             feature_2 = self.transform(feature, augmentation_type='strong')
@@ -181,8 +176,8 @@ class SimCLRDataset(Dataset):
         return feature_1, feature_2, label
 
     def __len__(self):
-        return len(self.labels)
-
+        return len(self.features)
+    
 if args.forget_rate is None:
     forget_rate = args.noise_rate
 else:
@@ -273,18 +268,17 @@ def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
     scale_factor_multi = 200
 
     if add_noise_level > 0.0:
-        beta_add = np.random.beta(0.1, 0.1, size=x.shape)
-        beta_add = torch.from_numpy(beta_add).float().to(device)
+        beta_add = torch.from_numpy(np.random.beta(0.1, 0.1, size=x.shape)).float().to(device)
         beta_add = scale_factor_additive * (beta_add - 0.5)
         add_noise = add_noise_level * beta_add
 
     if mult_noise_level > 0.0:
-        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)
-        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        beta_mult = torch.from_numpy(np.random.beta(0.1, 0.1, size=x.shape)).float().to(device)
         beta_mult = scale_factor_multi * (beta_mult - 0.5)
         mult_noise = 1 + mult_noise_level * beta_mult
     
-    return mult_noise * x + add_noise
+    return (mult_noise * x + add_noise).to(device)
+
 
 def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
     if noise_rate == 0:
@@ -508,7 +502,7 @@ def train(train_loader, model, optimizer, epoch, temperature):
     model.train()
     total_loss = 0
     for step, (x_i, x_j, _) in enumerate(train_loader):
-        x_i, x_j = x_i.to(device), x_j.to(device)
+        x_i, x_j = x_i.to(device), x_j.to(device)  # Move to GPU here
         _, z_i = model(x_i)
         _, z_j = model(x_j)
         loss = nt_xent_loss(z_i, z_j, temperature)
@@ -516,6 +510,7 @@ def train(train_loader, model, optimizer, epoch, temperature):
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
+    torch.cuda.synchronize()
     print(f"Epoch [{epoch + 1}], Loss: {total_loss / len(train_loader)}")
 
 def clean_class_name(class_name):
@@ -529,10 +524,10 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
     all_labels = []
     
     with torch.no_grad():
-        for data, labels, _ in test_loader:
+        for data, _, labels in test_loader:
             data = data.to(device)
             labels = labels.to(device)
-            outputs = model(data)
+            outputs, _ = model(data)
             _, preds = torch.max(outputs, 1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
@@ -676,6 +671,7 @@ def handle_inf_nan(features_np):
 
 
 def main():
+    print(f"Using device: {device}")
     print(model_str)
     label_encoder = LabelEncoder()
 
@@ -782,7 +778,7 @@ def main():
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
     # Apply feature noise
-    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced, device=device), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).cpu().numpy()
 
     # Print class distribution after introducing noise
     print("Before augmentation:")
@@ -793,6 +789,7 @@ def main():
 
     # Apply data augmentation to the noisy data
     X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
+    print(f"Shape of X_train_augmented: {X_train_augmented.shape}")
 
     if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
         # Recalculate noise_or_not to match the augmented data size
@@ -811,55 +808,54 @@ def main():
     fold = 0
     augmentation = TabularAugmentation(noise_level_weak=0.01, noise_level_strong=0.1)
 
-    for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
-        if max(train_idx) >= len(noise_or_not) or max(val_idx) >= len(noise_or_not):
-            print("IndexError: Index is out of bounds for noise_or_not array.")
-            continue
-        fold += 1
-        X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
-        y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
-        noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
+    # for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
+    #     if max(train_idx) >= len(noise_or_not) or max(val_idx) >= len(noise_or_not):
+    #         print("IndexError: Index is out of bounds for noise_or_not array.")
+    #         continue
+    #     fold += 1
+    #     X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
+    #     y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
+    #     noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
 
-        train_dataset = SimCLRDataset(X_train_fold, y_train_fold, transform=augmentation)
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+    #     train_dataset = SimCLRDataset(X_train_fold, y_train_fold, transform=augmentation)
+    #     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
-        val_dataset = SimCLRDataset(X_clean_test, y_clean_test, transform=None)
-        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+    #     val_dataset = SimCLRDataset(X_clean_test, y_clean_test, transform=None)
+    #     val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-        model = SimCLRMLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    #     model = SimCLRMLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).to(device)        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-        for epoch in range(args.n_epoch):
-            train(train_loader, model, optimizer, epoch, temperature=0.5)
+    #     for epoch in range(args.n_epoch):
+    #         train(train_loader, model, optimizer, epoch, temperature=0.5)
 
-            metrics = evaluate(val_loader, model.encoder, label_encoder, args, save_conf_matrix=False)
+    #         metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
+    #         row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
+    #         with open(validation_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
+    #             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    #             writer.writerow(row_data)
 
-            row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
-            with open(validation_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writerow(row_data)
-
-    print("Training completed. Results from all folds:")
-    for i, result in enumerate(results, 1):
-        print(f'Results Fold {i}:', result)
+    # print("Training completed. Results from all folds:")
+    # for i, result in enumerate(results, 1):
+    #     print(f'Results Fold {i}:', result)
 
     # Full dataset training
     print("Training on the full dataset...")
     full_train_dataset = SimCLRDataset(X_train_augmented, y_train_augmented, transform=augmentation)
-    full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+    full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
 
-    full_model = SimCLRMLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
+    full_model = SimCLRMLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).to(device)
     full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     for epoch in range(args.n_epoch):
         train(full_train_loader, full_model, full_optimizer, epoch, temperature=0.5)
 
     clean_test_dataset = SimCLRDataset(X_clean_test, y_clean_test, transform=None)
-    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
-
+    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+    
     print("Evaluating on clean dataset...")
-    full_metrics = evaluate(clean_test_loader, full_model.encoder, label_encoder, args, save_conf_matrix=True)
-    predictions = evaluate(clean_test_loader, full_model.encoder, label_encoder, args, return_predictions=True)
+    full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
+    predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
+
 
     predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
     os.makedirs(predictions_dir, exist_ok=True)
@@ -881,4 +877,5 @@ def main():
 
 
 if __name__ == '__main__':
+    mp.set_start_method('spawn') 
     main()
