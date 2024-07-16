@@ -1,7 +1,5 @@
-# -*- coding:utf-8 -*-
 from __future__ import print_function 
-from model import SimCLRMLPNet
-import time
+from model import MoCo
 
 # General Imports
 import os
@@ -85,21 +83,26 @@ torch.manual_seed(args.seed)
 if device.type == 'cuda':
     torch.cuda.manual_seed(args.seed)
 
-class SimCLRDataset(Dataset):
-    def __init__(self, features, labels, transform=None):
+class TabularMoCoDataset(Dataset):
+    def __init__(self, features, labels, transform):
         self.features = torch.tensor(features, dtype=torch.float32)
         self.labels = torch.tensor(labels)
         self.transform = transform
 
     def __getitem__(self, index):
-        feature = self.features[index].cpu().numpy()
-        if self.transform:
-            feature_1 = self.transform(feature, augmentation_type='weak')
-            feature_2 = self.transform(feature, augmentation_type='strong')
-        else:
-            feature_1, feature_2 = feature, feature
+        feature = self.features[index]
         label = self.labels[index]
-        return feature_1, feature_2, label
+        
+        if self.transform:
+            # Apply two separate augmentations
+            feature_q = self.transform(feature)
+            feature_k = self.transform(feature)
+        else:
+            # If no transform is specified, use the original feature for both
+            feature_q = feature
+            feature_k = feature
+        
+        return feature_q, feature_k, label
 
     def __len__(self):
         return len(self.features)
@@ -123,34 +126,17 @@ def nt_xent_loss(projections_1, projections_2, temperature):
     return loss
 
 class TabularAugmentation:
-    def __init__(self, prob_weak=0.1, prob_strong=0.5, training_data=None):
-        self.prob_weak = prob_weak
-        self.prob_strong = prob_strong
-        self.training_data = training_data
-
-        # Compute empirical marginal distributions for each feature
-        self.feature_distributions = []
-        for i in range(training_data.shape[1]):
-            unique_values = np.unique(training_data[:, i])
-            self.feature_distributions.append(unique_values)
-
-    def generate_mask(self, size, prob):
-        return (np.random.rand(size) < prob).astype(float)
-
-    def sample_from_distribution(self, feature_index):
-        return np.random.choice(self.feature_distributions[feature_index])
-
-    def augment(self, x, prob):
-        mask = self.generate_mask(len(x), prob)
-        x_bar = np.array([self.sample_from_distribution(i) for i in range(len(x))])
-        x_tilde = x * mask + (1 - mask) * x_bar
-        return torch.tensor(x_tilde, dtype=torch.float32).clone().detach()
+    def __init__(self, noise_level_weak=0.01, noise_level_strong=0.1):
+        self.noise_level_weak = noise_level_weak
+        self.noise_level_strong = noise_level_strong
 
     def apply_weak_augmentation(self, x):
-        return self.augment(x, self.prob_weak)
+        noise = torch.randn_like(x, device=x.device) * self.noise_level_weak
+        return x + noise
 
     def apply_strong_augmentation(self, x):
-        return self.augment(x, self.prob_strong)
+        noise = torch.randn_like(x, device=x.device) * self.noise_level_strong
+        return x + noise
 
     def __call__(self, x, augmentation_type='weak'):
         if augmentation_type == 'weak':
@@ -159,7 +145,6 @@ class TabularAugmentation:
             return self.apply_strong_augmentation(x)
         else:
             raise ValueError("Invalid augmentation type. Choose 'weak' or 'strong'.")
-
         
 # Hyper Parameters
 if args.dataset == "CIC_IDS_2017":
@@ -182,7 +167,7 @@ class SimCLRDataset(Dataset):
         self.transform = transform
 
     def __getitem__(self, index):
-        feature = self.features[index].cpu().numpy()  # Ensure feature is a numpy array
+        feature = self.features[index]
         if self.transform:
             feature_1 = self.transform(feature, augmentation_type='weak')
             feature_2 = self.transform(feature, augmentation_type='strong')
@@ -190,7 +175,6 @@ class SimCLRDataset(Dataset):
             feature_1, feature_2 = feature, feature
         label = self.labels[index]
         return feature_1, feature_2, label
-
 
     def __len__(self):
         return len(self.features)
@@ -515,56 +499,47 @@ def accuracy(logit, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
-def print_metrics(preds, labels, phase):
-    accuracy = accuracy_score(labels, preds)
-    f1 = f1_score(labels, preds, average='macro')
-    print(f"{phase} Accuracy: {accuracy:.4f}, F1 Score: {f1:.4f}")
 
-def train(train_loader, model, optimizer, epoch, temperature):
+def train_moco(train_loader, model, criterion, optimizer, epoch):
     model.train()
     total_loss = 0
     all_preds = []
-    all_labels = []
+    all_targets = []
     
-    for step, (x_i, x_j, labels) in enumerate(train_loader):
-        x_i, x_j, labels = x_i.to(device), x_j.to(device), labels.to(device)
-        _, z_i = model(x_i)
-        _, z_j = model(x_j)
-        loss = nt_xent_loss(z_i, z_j, temperature)
+    for step, (im_q, im_k, labels) in enumerate(train_loader):
+        im_q, im_k = im_q.cuda(non_blocking=True), im_k.cuda(non_blocking=True)
+        labels = labels.cuda(non_blocking=True)
+
+        # compute output and loss
+        output, target = model(im_q, im_k)
+        loss = criterion(output, target)
+
+        # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
         total_loss += loss.item()
 
-        # Collect predictions and labels for accuracy and F1 score
-        all_preds.extend(z_i.argmax(dim=1).cpu().numpy())
-        all_labels.extend(labels.cpu().numpy())
+        # compute predictions for F1 and accuracy
+        preds = torch.argmax(output, dim=1)
+        all_preds.extend(preds.cpu().numpy())
+        all_targets.extend(target.cpu().numpy())
 
-    torch.cuda.synchronize()
-    print(f"Epoch [{epoch + 1}], Loss: {total_loss / len(train_loader)}")
-    print_metrics(all_preds, all_labels, "Training")
+    # compute epoch metrics
+    epoch_loss = total_loss / len(train_loader)
+    epoch_f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0)
+    epoch_accuracy = accuracy_score(all_targets, all_preds)
 
-def validate(validation_loader, model):
-    model.eval()
-    all_preds = []
-    all_labels = []
-    
-    with torch.no_grad():
-        for data, _, labels in validation_loader:
-            data, labels = data.to(device), labels.to(device)
-            outputs, _ = model(data)
-            _, preds = torch.max(outputs, 1)
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+    return epoch_loss, epoch_f1, epoch_accuracy
 
-    print_metrics(all_preds, all_labels, "Validation")
 
 def clean_class_name(class_name):
     cleaned_name = re.sub(r'[^a-zA-Z0-9]+', ' ', class_name)
     cleaned_name = re.sub(r'\bweb attack\b', '', cleaned_name, flags=re.IGNORECASE)
     return cleaned_name.strip()
 
-def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, return_predictions=False):
+def evaluate_moco(test_loader, model, label_encoder, args, save_conf_matrix=False, return_predictions=False):
     model.eval()
     all_preds = []
     all_labels = []
@@ -573,13 +548,30 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         for data, _, labels in test_loader:
             data = data.to(device)
             labels = labels.to(device)
-            outputs, _ = model(data)
+            # Use only the encoder part of the MoCo model
+            outputs = model.encoder_q(data)
             _, preds = torch.max(outputs, 1)
-            all_preds.extend(preds.cpu().numpy())
+            preds = preds.cpu().numpy()
+
+            # Ensure predictions are constrained to valid classes
+            valid_classes = np.arange(len(label_encoder.classes_))
+            preds = np.array([p if p in valid_classes else -1 for p in preds])
+            
+            all_preds.extend(preds)
             all_labels.extend(labels.cpu().numpy())
 
     if return_predictions:
         return all_preds
+
+    # Remove invalid predictions (-1)
+    valid_indices = np.array(all_preds) != -1
+    all_preds = np.array(all_preds)[valid_indices]
+    all_labels = np.array(all_labels)[valid_indices]
+
+    if len(np.unique(all_preds)) == 1:
+        # To avoid empty or single-class predictions issue
+        print("Warning: Only one class predicted. Skipping evaluation.")
+        return {'accuracy': 0.0, 'balanced_accuracy': 0.0, 'precision_macro': 0.0, 'recall_macro': 0.0, 'f1_micro': 0.0, 'f1_macro': 0.0, 'f1_average': 0.0}
 
     if args.dataset == 'CIC_IDS_2017':
         index_to_class_name = {i: label_encoder.inverse_transform([i])[0] for i in range(len(label_encoder.classes_))}
@@ -658,7 +650,7 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
 
         
         ax.set_xticklabels(tick_labels1, rotation=90)
-        ax.set_yticklabels(tick_labels2, rotation=0)
+        ax.set_yticklabels(t_labels2, rotation=0)
         ax.tick_params(left=False, bottom=False, pad=10)
 
         unicode_symbol_x = chr(0x25B6)
@@ -695,6 +687,8 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
 
     return metrics
 
+
+
 def weights_init(m):
     if isinstance(m, nn.Linear):
         init.xavier_uniform_(m.weight.data)
@@ -714,6 +708,39 @@ def handle_inf_nan(features_np):
     features_np = imputer.fit_transform(features_np)
     scaler = StandardScaler()
     return scaler.fit_transform(features_np)
+
+class TabularAugmentation:
+    def __init__(self, noise_level=0.05):
+        self.noise_level = noise_level
+
+    def __call__(self, x):
+        return x + torch.randn_like(x) * self.noise_level
+    
+def ensure_class_presence(features, labels, min_samples_per_class=1):
+    unique, counts = np.unique(labels, return_counts=True)
+    class_dict = dict(zip(unique, counts))
+    missing_classes = [cls for cls in np.arange(len(unique)) if class_dict.get(cls, 0) < min_samples_per_class]
+
+    for cls in missing_classes:
+        indices = np.where(labels == cls)[0]
+        if len(indices) == 0:
+            print(f"Class {cls} is missing from the dataset. Adding synthetic samples.")
+            synthetic_sample = np.mean(features, axis=0).reshape(1, -1)
+            synthetic_label = np.array([cls])
+            features = np.vstack((features, synthetic_sample))
+            labels = np.append(labels, synthetic_label)
+    
+    return features, labels
+
+def train_val_test_split(features, labels, test_size=0.4, val_size=0.2, random_state=42):
+    X_train, X_temp, y_train, y_temp = train_test_split(features, labels, test_size=test_size, random_state=random_state, stratify=labels)
+    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=val_size/(1-test_size), random_state=random_state, stratify=y_temp)
+    
+    X_train, y_train = ensure_class_presence(X_train, y_train)
+    X_val, y_val = ensure_class_presence(X_val, y_val)
+    X_test, y_test = ensure_class_presence(X_test, y_test)
+
+    return X_train, X_val, X_test, y_train, y_val, y_test
 
 
 def main():
@@ -735,9 +762,7 @@ def main():
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
         features_np = handle_inf_nan(features_np)
 
-        # Splitting the data into training, test, and a clean test set
-        X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
-        X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+        X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(features_np, labels_np)
 
     elif args.dataset == 'windows_pe_real':
         npz_noisy_file_path = 'data/Windows_PE/real_world/malware.npz'
@@ -751,6 +776,12 @@ def main():
             X_clean_test, y_clean_test = data['X_test'], data['y_test']
         y_clean_test = label_encoder.transform(y_clean_test)
 
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42, stratify=y_train)
+        X_train, y_train = ensure_class_presence(X_train, y_train)
+        X_val, y_val = ensure_class_presence(X_val, y_val)
+        X_test, y_test = ensure_class_presence(X_test, y_test)
+        X_clean_test, y_clean_test = ensure_class_presence(X_clean_test, y_clean_test)
+
     elif args.dataset == 'BODMAS':
         npz_file_path = 'data/Windows_PE/synthetic/malware_true.npz'
         with np.load(npz_file_path) as data:
@@ -759,14 +790,46 @@ def main():
         y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
 
-        # Splitting the data into training and a clean test set
-        X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
+        X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X_temp, y_temp)
 
-    # Directory full dataset evaluation results
+        X_train, y_train = ensure_class_presence(X_train, y_train)
+        X_val, y_val = ensure_class_presence(X_val, y_val)
+        X_test, y_test = ensure_class_presence(X_test, y_test)
+
+    # Apply imbalance, noise, and augmentation
+    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced, device=device), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).cpu().numpy()
+    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
+
+    # Ensure class presence after augmentation
+    X_train_augmented, y_train_augmented = ensure_class_presence(X_train_augmented, y_train_augmented)
+
+    if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
+        # Recalculate noise_or_not to match the augmented data size
+        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
+
+    # Print class distribution after data augmentation
+    print("After augmentation:")
+    print(f"Length of X_train_augmented: {len(X_train_augmented)}")
+    print(f"Length of y_train_augmented: {len(y_train_augmented)}")
+    print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
+    print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
+
+    # Create validation set
+    X_train, X_val, y_train, y_val = train_test_split(X_train_augmented, y_train_augmented, test_size=0.2, random_state=42)
+
+    # Create datasets and data loaders
+    augmentation = TabularAugmentation(noise_level=0.05)
+    train_dataset = TabularMoCoDataset(X_train, y_train, transform=augmentation)
+    val_dataset = TabularMoCoDataset(X_val, y_val, transform=None)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True, drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+
+    # Directory and file setup (unchanged)
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
-
-    # File paths for CSV and model files
+    validation_metrics_file = os.path.join(results_dir, f"{model_str}_validation.csv")
     full_dataset_metrics_file = os.path.join(results_dir, f"{model_str}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{model_str}_final_model.pth")
 
@@ -787,75 +850,52 @@ def main():
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-    # Print the original dataset sizes and class distribution
-    print("Original dataset:")
-    print(f"Length of X_train: {len(X_train)}")
-    print(f"Length of y_train: {len(y_train)}")
-    print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
+    # Define base encoder
+    class BaseEncoder(nn.Module):
+        def __init__(self, num_features, num_classes):
+            super(BaseEncoder, self).__init__()
+            self.fc1 = nn.Linear(num_features, 512)
+            self.fc2 = nn.Linear(512, 256)
+            self.fc3 = nn.Linear(256, num_classes)
 
-    # Apply imbalance to the training dataset
-    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+        def forward(self, x):
+            x = F.relu(self.fc1(x))
+            x = F.relu(self.fc2(x))
+            x = self.fc3(x)
+            return x
 
-    # Print class distribution after applying imbalance
-    print("Before introducing noise:")
-    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-    print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
-    print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
+    # Initialize MoCo model
+    moco = MoCo(lambda num_classes: BaseEncoder(X_train.shape[1], num_classes)).to(device)
 
-    # Introduce noise to the imbalanced data
-    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+    # Define loss function and optimizer
+    criterion = nn.CrossEntropyLoss().cuda()
+    optimizer = optim.Adam(moco.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # Apply feature noise
-    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced, device=device), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).cpu().numpy()
-
-    # Print class distribution after introducing noise
-    print("Before augmentation:")
-    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-    print(f"Length of y_train_noisy: {len(y_train_noisy)}")
-    print(f"Length of noise_or_not: {len(noise_or_not)}")
-    print("Class distribution after introducing noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
-
-    # Apply data augmentation to the noisy data
-    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
-    print(f"Shape of X_train_augmented: {X_train_augmented.shape}")
-
-    if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
-        # Recalculate noise_or_not to match the augmented data size
-        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
-
-    # Print class distribution after data augmentation
-    print("After augmentation:")
-    print(f"Length of X_train_augmented: {len(X_train_augmented)}")
-    print(f"Length of y_train_augmented: {len(y_train_augmented)}")
-    print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
-    print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
-
-
-    # Initialize the augmentation with the training data
-    augmentation = TabularAugmentation(prob_weak=0.1, prob_strong=0.5, training_data=X_train)
-
-    # Full dataset training
-    print("Training on the full dataset...")
-    full_train_dataset = SimCLRDataset(X_train_augmented, y_train_augmented, transform=augmentation)
-    full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
-
-    full_model = SimCLRMLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).to(device)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
-    validation_dataset = SimCLRDataset(X_test, y_test, transform=None)
-    validation_loader = DataLoader(dataset=validation_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
-
+    # Training loop
     for epoch in range(args.n_epoch):
-        train(full_train_loader, full_model, full_optimizer, epoch, temperature=0.5)
-        validate(validation_loader, full_model)
+        train_loss, train_f1, train_accuracy = train_moco(train_loader, moco, criterion, optimizer, epoch)
+        val_metrics = evaluate_moco(val_loader, moco, label_encoder, args)
+        
+        # Extract individual metrics
+        val_f1 = val_metrics['f1_macro']
+        val_accuracy = val_metrics['accuracy']
+        
+        print(f"Epoch [{epoch+1}/{args.n_epoch}], "
+            f"Train Loss: {train_loss:.4f}, Train F1: {train_f1:.4f}, Train Acc: {train_accuracy:.4f}, "
+            f"Val F1: {val_f1:.4f}, Val Acc: {val_accuracy:.4f}")
 
-    clean_test_dataset = SimCLRDataset(X_clean_test, y_clean_test, transform=None)
-    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
-    
+    # After training, use the query encoder for downstream tasks
+    encoder = moco.encoder_q
+
+    # Prepare clean test dataset
+    clean_test_dataset = TabularMoCoDataset(X_clean_test, y_clean_test, transform=None)
+    clean_test_loader = DataLoader(clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+
     print("Evaluating on clean dataset...")
-    full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
-    predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
+    full_metrics = evaluate_moco(clean_test_loader, encoder, label_encoder, args)
 
+    # Save predictions
+    predictions = evaluate_moco(clean_test_loader, encoder, label_encoder, args, return_predictions=True)
     predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
     os.makedirs(predictions_dir, exist_ok=True)
     predictions_filename = os.path.join(predictions_dir, f"{args.dataset}_final_predictions.csv")
@@ -867,7 +907,8 @@ def main():
 
     print(f"Predictions saved to {predictions_filename}")
 
-    row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', epoch)] + list(full_metrics.items()))
+    # Save metrics
+    row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', args.n_epoch - 1)] + list(full_metrics.items()))
     with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerow(row_data)
@@ -876,5 +917,5 @@ def main():
 
 
 if __name__ == '__main__':
-    mp.set_start_method('spawn') 
+    mp.set_start_method('spawn')
     main()

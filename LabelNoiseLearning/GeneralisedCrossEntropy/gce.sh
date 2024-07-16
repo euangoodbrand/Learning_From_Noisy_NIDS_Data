@@ -50,16 +50,16 @@ do
     #     done
     # done
 
-    # Experiment 7 generalisedCrossEntropy, windows PE, all combinations of noise rate, noise type, and imbalance  ratios with data augmentation
-    # for data_augmentation in "${data_augmentations[@]}"; do
-    #     for noise_rate in "${noise_rates[@]}"; do
-    #         for noise_type in "${noise_types[@]}"; do
-    #             for imbalance_ratio in "${imbalance_ratios[@]}"; do
-    #                 CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_7$
-    #             done
-    #         done
-    #     done
-    # done
+    Experiment 7 generalisedCrossEntropy, windows PE, all combinations of noise rate, noise type, and imbalance  ratios with data augmentation
+    for data_augmentation in "${data_augmentations[@]}"; do
+        for noise_rate in "${noise_rates[@]}"; do
+            for noise_type in "${noise_types[@]}"; do
+                for imbalance_ratio in "${imbalance_ratios[@]}"; do
+                    CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_7$
+                done
+            done
+        done
+    done
 
     # Experiment 8 generalisedCrossEntropy, windows PE, all combinations of noise rate, noise type, and imbalance  ratios with sample re-weighting techniques
     # for weight_resampling in "${weight_resamplings[@]}"; do
@@ -72,67 +72,67 @@ do
     #   done
     # done
 
-    # New Experiment 9: Additive noise
-    for add_noise_level in "${feature_add_noise_levels[@]}"; do
-      CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_9$
-    done
+    # # New Experiment 9: Additive noise
+    # for add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #   CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_9$
+    # done
 
-    # New Experiment 10: Multiplicative noise
-    for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-      CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_10$
-    done
+    # # New Experiment 10: Multiplicative noise
+    # for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #   CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_10$
+    # done
 
-    # New Experiment 11: Combination of additive and multiplicative noise
-    for add_noise_level in "${feature_add_noise_levels[@]}"; do
-      for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_11$
-      done
-    done
+    # # New Experiment 11: Combination of additive and multiplicative noise
+    # for add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #   for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_11$
+    #   done
+    # done
 
-    # New Experiment 12: Label noise combined with additive noise
-    for noise_rate in "${noise_rates[@]}"; do
-      for add_noise_level in "${feature_add_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_12$
-      done
-    done
+    # # New Experiment 12: Label noise combined with additive noise
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_12$
+    #   done
+    # done
 
-    # New Experiment 13: Label noise combined with multiplicative noise
-    for noise_rate in "${noise_rates[@]}"; do
-      for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_13$
-      done
-    done
+    # # New Experiment 13: Label noise combined with multiplicative noise
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_13$
+    #   done
+    # done
 
-    # New Experiment 14: Additive noise with L2 regularization
-    for add_noise_level in "${feature_add_noise_levels[@]}"; do
-      CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_14$
-    done
+    # # New Experiment 14: Additive noise with L2 regularization
+    # for add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #   CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_14$
+    # done
 
-    # New Experiment 15: Multiplicative noise with L2 regularization
-    for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-      CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_15$
-    done
+    # # New Experiment 15: Multiplicative noise with L2 regularization
+    # for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #   CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_15$
+    # done
 
-    # New Experiment 16: Combination of additive and multiplicative noise with L2 regularization
-    for add_noise_level in "${feature_add_noise_levels[@]}"; do
-      for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_16$
-      done
-    done
+    # # New Experiment 16: Combination of additive and multiplicative noise with L2 regularization
+    # for add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #   for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate 0 --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_16$
+    #   done
+    # done
 
-    # New Experiment 17: Label noise combined with additive noise with L2 regularization
-    for noise_rate in "${noise_rates[@]}"; do
-      for add_noise_level in "${feature_add_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_17$
-      done
-    done
+    # # New Experiment 17: Label noise combined with additive noise with L2 regularization
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for add_noise_level in "${feature_add_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level ${add_noise_level} --feature_mult_noise_level 0.0 --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_17$
+    #   done
+    # done
 
-    # New Experiment 18: Label noise combined with multiplicative noise with L2 regularization
-    for noise_rate in "${noise_rates[@]}"; do
-      for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_18$
-      done
-    done
+    # # New Experiment 18: Label noise combined with multiplicative noise with L2 regularization
+    # for noise_rate in "${noise_rates[@]}"; do
+    #   for mult_noise_level in "${feature_mult_noise_levels[@]}"; do
+    #     CUDA_LAUNCH_BLOCKING=1 python generalisedCrossEntropy.py --dataset windows_pe_real --model_type ${model_type} --feature_add_noise_level 0.0 --feature_mult_noise_level ${mult_noise_level} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --weight_decay 0.01 --result_dir results/experiment_18$
+    #   done
+    # done
 
 
 

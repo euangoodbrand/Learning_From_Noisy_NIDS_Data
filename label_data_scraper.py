@@ -33,12 +33,15 @@ def extract_experiment_details(filename):
                 details['data_augmentation'] = aug
                 break
 
-    # Extract noise type and level
+    # Extract noise type and level (only for uniform noise)
     for part in parts:
-        if '-noise' in part:
+        if 'uniform-noise' in part:
             noise_parts = part.split('-noise')
-            details['noise_type'] = noise_parts[0]
+            details['noise_type'] = 'uniform'
             details['noise_level'] = noise_parts[1]
+        elif any(noise_type in part for noise_type in ['class-noise', 'feature-noise', 'MIMICRY-noise']):
+            # Skip non-uniform noise types
+            return None
 
     # Extract imbalance ratio
     for part in parts:
@@ -61,10 +64,13 @@ def extract_experiment_details(filename):
 
     return details
 
-# The rest of the script remains the same
-
 def process_csv_file(file_path, technique, dataset, experiment_num):
     try:
+        details = extract_experiment_details(file_path.name)
+        if details is None:
+            logging.info(f"Skipping non-uniform noise file: {file_path}")
+            return None
+
         with open(file_path, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -73,7 +79,6 @@ def process_csv_file(file_path, technique, dataset, experiment_num):
                 recall = float(row.get('recall_macro', 0))
                 f1 = float(row.get('f1_average', 0))
                 
-                details = extract_experiment_details(file_path.name)
                 result = [technique, dataset, accuracy, precision, recall, f1]
                 
                 result.extend([

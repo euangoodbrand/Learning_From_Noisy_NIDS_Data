@@ -49,27 +49,27 @@ do
     #     done
     # done
 
-    # Experiment 7 coTeaching, windows PE, all combinations of noise rate, noise type, and imbalance ratios with data augmentation
-    # for data_augmentation in "${data_augmentations[@]}"; do
-    #     for noise_rate in "${noise_rates[@]}"; do
-    #         for noise_type in "${noise_types[@]}"; do
-    #             for imbalance_ratio in "${imbalance_ratios[@]}"; do
-    #                 CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --feature_add_noise_level ${feature_add_noise_level} --feature_mult_noise_level ${feature_mult_noise_level} --result_dir results/experiment_7$
-    #             done
-    #         done
-    #     done
-    # done
-
-    Experiment 8 coTeaching, windows PE, all combinations of noise rate, noise type, and imbalance ratios with sample re-weighting techniques
-    for weight_resampling in "${weight_resamplings[@]}"; do
-      for noise_rate in "${noise_rates[@]}"; do
-        for noise_type in "${noise_types[@]}"; do
-          for imbalance_ratio in "${imbalance_ratios[@]}"; do
-            CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_8$
-          done
+    Experiment 7 coTeaching, windows PE, all combinations of noise rate, noise type, and imbalance ratios with data augmentation
+    for data_augmentation in "${data_augmentations[@]}"; do
+        for noise_rate in "${noise_rates[@]}"; do
+            for noise_type in "${noise_types[@]}"; do
+                for imbalance_ratio in "${imbalance_ratios[@]}"; do
+                    CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_7$
+                done
+            done
         done
-      done
     done
+
+    # Experiment 8 coTeaching, windows PE, all combinations of noise rate, noise type, and imbalance ratios with sample re-weighting techniques
+    # for weight_resampling in "${weight_resamplings[@]}"; do
+    #   for noise_rate in "${noise_rates[@]}"; do
+    #     for noise_type in "${noise_types[@]}"; do
+    #       for imbalance_ratio in "${imbalance_ratios[@]}"; do
+    #         CUDA_LAUNCH_BLOCKING=1 python coTeaching.py --dataset windows_pe_real --model_type ${model_type} --weight_resampling ${weight_resampling} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_8$
+    #       done
+    #     done
+    #   done
+    # done
 
     # # New experiments with feature additive noise
     # for add_noise_level in "${add_noise_levels[@]}"; do

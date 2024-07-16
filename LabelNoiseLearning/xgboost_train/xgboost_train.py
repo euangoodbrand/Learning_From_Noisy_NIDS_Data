@@ -1,6 +1,5 @@
 # -*- coding:utf-8 -*-
-from __future__ import print_function 
-from model import MLPNet
+from __future__ import print_function
 
 # General Imports
 import os
@@ -20,10 +19,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
 # Sklearn Import
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
@@ -38,19 +35,21 @@ from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import RandomOverSampler, ADASYN
 
-# Pytorch Imports
-import torch 
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.init as init
-import torch.nn.functional as F
-from torch.nn import CrossEntropyLoss
-from torch.utils.data import Dataset, DataLoader
+# XGBoost Import
+import torch
+from sklearn.feature_selection import SelectFromModel
+from sklearn.preprocessing import RobustScaler
+from sklearn.ensemble import IsolationForest
 
-for dirname, _, filenames in os.walk('/data'):
-    for filename in filenames:
-        print(os.path.join(dirname, filename))
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import uniform, randint
 
+from torch.utils.data import DataLoader
+# Torch and XGBoost Imports
+import torch
+from torch.utils.data import DataLoader
+import xgboost as xgb
+from xgboost import XGBClassifier
 
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
@@ -79,12 +78,10 @@ parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
 parser.add_argument('--weight_decay', type=float, default=0.0, help='L2 regularization weight decay. Default is 0 (no regularization).')
 
-
 args = parser.parse_args()
 
 # Seed
-torch.manual_seed(args.seed)
-torch.cuda.manual_seed(args.seed)
+np.random.seed(args.seed)
 
 # Hyper Parameters
 
@@ -101,232 +98,77 @@ elif args.dataset == "BODMAS":
     learning_rate = args.lr 
     init_epoch = 0
 
-
-class CICIDSDataset(Dataset):
+# Define dataset class
+class CICIDSDataset:
     def __init__(self, features, labels, noise_or_not):
         self.features = features
         self.labels = labels
-        self.noise_or_not = noise_or_not 
+        self.noise_or_not = noise_or_not
 
     def __getitem__(self, index):
-        feature = torch.tensor(self.features[index], dtype=torch.float32)
-        label = torch.tensor(self.labels[index], dtype=torch.long)
-        return feature, label, index  
+        feature = self.features[index]
+        label = self.labels[index]
+        return feature, label, index
 
     def __len__(self):
         return len(self.labels)
 
+# Adjust learning rate and betas for Adam Optimizer
+mom1 = 0.9
+mom2 = 0.1
+alpha_plan = [learning_rate] * args.n_epoch
+beta1_plan = [mom1] * args.n_epoch
+for i in range(args.epoch_decay_start, args.n_epoch):
+    alpha_plan[i] = float(args.n_epoch - i) / (args.n_epoch - args.epoch_decay_start) * learning_rate
+    beta1_plan[i] = mom2
+
+def adjust_learning_rate(optimizer, epoch):
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = alpha_plan[epoch]
+        param_group['betas'] = (beta1_plan[epoch], 0.999)
 
 if args.forget_rate is None:
-    forget_rate=args.noise_rate
+    forget_rate = args.noise_rate
 else:
-    forget_rate=args.forget_rate
+    forget_rate = args.forget_rate
 
+# Define drop rate schedule
+def gen_forget_rate(fr_type='type_1'):
+    if fr_type == 'type_1':
+        rate_schedule = np.ones(args.n_epoch) * forget_rate
+        rate_schedule[:args.num_gradual] = np.linspace(0, forget_rate, args.num_gradual)
+    return rate_schedule
 
-def introduce_noise(labels, features, noise_type, noise_rate):
-    if noise_type == 'uniform':
-        return introduce_uniform_noise(labels, noise_rate)
-    elif noise_type == 'class':
-        # Directly use the predefined matrix for class noise
-        return introduce_class_dependent_label_noise(labels, predefined_matrix, noise_rate)
-    elif noise_type == 'feature':
-        thresholds = calculate_feature_thresholds(features)
-        return introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5)
-    elif noise_type == 'MIMICRY':
-        # Directly use the predefined matrix for class noise
-        return introduce_mimicry_noise(labels, predefined_matrix, noise_rate)
-    else:
-        raise ValueError("Invalid noise type specified.")
+rate_schedule = gen_forget_rate(args.fr_type)
 
+save_dir = args.result_dir + '/' + args.dataset + '/%s/' % args.model_type
 
-def apply_data_augmentation(features, labels, augmentation_method):
-    try:
-        unique, counts = np.unique(labels, return_counts=True)
-        print(f"Class distribution before augmentation: {dict(zip(unique, counts))}")
+if not os.path.exists(save_dir):
+    os.system('mkdir -p %s' % save_dir)
 
-        if augmentation_method == 'smote':
-            # Adjust n_neighbors based on the smallest class count minus one (since it cannot be more than the number of samples in the smallest class)
-            min_samples = np.min(counts)
-            n_neighbors = min(5, min_samples - 1) if min_samples > 1 else 1
-            smote = SMOTE(random_state=42, k_neighbors=n_neighbors)
-            features, labels = smote.fit_resample(features, labels)
-        elif augmentation_method == 'undersampling':
-            rus = RandomUnderSampler(random_state=42)
-            features, labels = rus.fit_resample(features, labels)
-        elif augmentation_method == 'oversampling':
-            ros = RandomOverSampler(random_state=42)
-            features, labels = ros.fit_resample(features, labels)
-        elif augmentation_method == 'adasyn':
-            min_samples = np.min(counts)
-            n_neighbors = min(5, min_samples - 1) if min_samples > 1 else 1
-            adasyn = ADASYN(random_state=42, n_neighbors=n_neighbors)
-            features, labels = adasyn.fit_resample(features, labels)
+# Define model string including sample reweighting
+model_str = (
+    f"{args.model_type}_{args.dataset}_"
+    f"{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_"
+    f"{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_"
+    f"addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}_"
+    f"{args.weight_resampling if args.weight_resampling != 'none' else 'no_weight_resampling'}"
+)
 
-        unique, counts = np.unique(labels, return_counts=True)
-        print(f"Class distribution after augmentation: {dict(zip(unique, counts))}")
+txtfile = save_dir + "/" + model_str + ".csv"
+nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+if os.path.exists(txtfile):
+    os.system('mv %s %s' % (txtfile, txtfile + ".bak-%s" % nowTime))
 
-        return features, labels
-    except ValueError as e:
-        print(f"Error during {augmentation_method}: {e}")
-        return features, labels
-    except NotFittedError as e:
-        print(f"Model fitting error with {augmentation_method}: {e}")
-        return features, labels
-
-
-
-# Class dependant noise matrix, from previous evaluation run.
-predefined_matrix = np.array([
-    [0.8, 0.03, 0.01, 0.01, 0.06, 0.0, 0.0, 0.0, 0.07, 0.0, 0.02, 0.0],
-    [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    [0.01, 0.0, 0.98, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    [0.03, 0.0, 0.0, 0.94, 0.0, 0.0, 0.0, 0.0, 0.02, 0.01, 0.0, 0.0],
-    [0.0, 0.0, 0.01, 0.0, 0.99, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    [0.03, 0.0, 0.0, 0.03, 0.0, 0.0, 0.94, 0.0, 0.0, 0.0, 0.0, 0.0],
-    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-    [0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.99, 0.0, 0.0, 0.0],
-    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.99, 0.0],
-    [0.3, 0.0, 0.0, 0.03, 0.26, 0.0, 0.0, 0.0, 0.05, 0.0, 0.01, 0.35]
-])
-
-# MIMICRY matrix for windows pe created from windows clean and noisy data
-noise_transition_matrix = np.array([
-    [0.534045, 0.005340, 0.001335, 0.012016, 0.093458, 0.006676, 0.009346, 0.016021, 0.088117, 0.072096, 0.125501, 0.036048],
-    [0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
-    [0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
-    [0.000000, 0.000000, 0.000000, 0.501524, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.498476, 0.000000, 0.000000],
-    [0.000000, 0.000000, 0.000000, 0.000000, 0.995006, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.004994],
-    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
-    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
-    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000],
-    [0.000000, 0.000000, 0.006250, 0.000000, 0.006250, 0.000000, 0.000000, 0.000000, 0.987500, 0.000000, 0.000000, 0.000000],
-    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000],
-    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000],
-    [0.000000, 0.000000, 0.000000, 0.019231, 0.730769, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.250000]
-])
-
-def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
-    device = x.device
-    add_noise = torch.zeros_like(x, device=device)
-    mult_noise = torch.ones_like(x, device=device)
-    scale_factor_additive = 75
-    scale_factor_multi = 200
-
-    if add_noise_level > 0.0:
-        # Generate additive noise with an aggressive Beta distribution
-        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
-        beta_add = torch.from_numpy(beta_add).float().to(device)
-        # Scale to [-1, 1] and then apply additive noise
-        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
-        add_noise = add_noise_level * beta_add
-
-    if mult_noise_level > 0.0:
-        # Generate multiplicative noise with an aggressive Beta distribution
-        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
-        beta_mult = torch.from_numpy(beta_mult).float().to(device)
-        # Scale to [-1, 1] and then apply multiplicative noise
-        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
-        mult_noise = 1 + mult_noise_level * beta_mult
-    
-    return mult_noise * x + add_noise
-
-def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
-    if noise_rate == 0:
-        return labels.copy(), np.zeros(len(labels), dtype=bool)  # Return the original labels with no noise
-
-    n_samples = len(labels)
-    n_noisy = int(n_samples * noise_rate)
-    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
-
-    new_labels = labels.copy()
-    noise_or_not = np.zeros(n_samples, dtype=bool)
-
-    for idx in noisy_indices:
-        original_class = labels[idx]
-        new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
-        noise_or_not[idx] = new_labels[idx] != labels[idx]
-
-    return new_labels, noise_or_not
-
-
-def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
-    if noise_rate == 0:
-        return labels.copy(), np.zeros(len(labels), dtype=bool)
-
-    n_samples = len(labels)
-    n_noisy = int(n_samples * noise_rate)
-    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
-
-    new_labels = labels.copy()
-    noise_or_not = np.zeros(n_samples, dtype=bool)
-
-    for idx in noisy_indices:
-        original_class = labels[idx]
-        new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
-        noise_or_not[idx] = new_labels[idx] != labels[idx]
-
-    return new_labels, noise_or_not
-
-
-def calculate_feature_thresholds(features):
-    # Calculate thresholds for each feature, assuming features is a 2D array
-    thresholds = np.percentile(features, 50, axis=0)  # Median as threshold for each feature
-    return thresholds
-
-
-def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5):
-    if noise_rate == 0:
-        return labels.copy(), np.zeros(len(labels), dtype=bool)
-
-    knn = NearestNeighbors(n_neighbors=n_neighbors + 1)
-    knn.fit(features)
-    distances, indices = knn.kneighbors(features)
-
-    n_samples = len(labels)
-    n_noisy = int(n_samples * noise_rate)
-    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
-
-    new_labels = labels.copy()
-    noise_or_not = np.zeros(n_samples, dtype=bool)
-
-    for i in noisy_indices:
-        neighbor_indices = indices[i][1:]
-        neighbor_classes = labels[neighbor_indices]
-        different_class_neighbors = neighbor_indices[neighbor_classes != labels[i]]
-
-        if len(different_class_neighbors) > 0:
-            chosen_neighbor = np.random.choice(different_class_neighbors)
-            new_label = labels[chosen_neighbor]
-            new_labels[i] = new_label
-            noise_or_not[i] = new_label != labels[i]
-
-    return new_labels, noise_or_not
-
-
-
-def introduce_uniform_noise(labels, noise_rate):
-    if noise_rate == 0:
-        return labels.copy(), np.zeros(len(labels), dtype=bool)
-
-    n_samples = len(labels)
-    n_noisy = int(noise_rate * n_samples)
-    noisy_indices = np.random.choice(np.arange(n_samples), size=n_noisy, replace=False)
-
-    new_labels = labels.copy()
-    noise_or_not = np.zeros(n_samples, dtype=bool)
-    unique_labels = np.unique(labels)
-
-    for idx in noisy_indices:
-        original_label = labels[idx]
-        possible_labels = np.delete(unique_labels, np.where(unique_labels == original_label))
-        new_label = np.random.choice(possible_labels)
-        new_labels[idx] = new_label
-        noise_or_not[idx] = True
-
-    return new_labels, noise_or_not
-
+def handle_inf_nan(features_np):
+    print("Contains inf: ", np.isinf(features_np).any())
+    print("Contains -inf: ", np.isneginf(features_np).any())
+    print("Contains NaN: ", np.isnan(features_np).any())
+    features_np[np.isinf(features_np) | np.isneginf(features_np)] = np.nan
+    imputer = SimpleImputer(strategy='median')
+    features_np = imputer.fit_transform(features_np)
+    scaler = StandardScaler()
+    return scaler.fit_transform(features_np)
 
 def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample_half=True):
     if ratio == 0:
@@ -377,6 +219,112 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
     
     return features[indices_to_keep], labels[indices_to_keep]
 
+predefined_matrix = np.array([
+    [0.8, 0.03, 0.01, 0.01, 0.06, 0.0, 0.0, 0.0, 0.07, 0.0, 0.02, 0.0],
+    [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.01, 0.0, 0.98, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.03, 0.0, 0.0, 0.94, 0.0, 0.0, 0.0, 0.0, 0.02, 0.01, 0.0, 0.0],
+    [0.0, 0.0, 0.01, 0.0, 0.99, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.03, 0.0, 0.0, 0.03, 0.0, 0.0, 0.94, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.99, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.99, 0.0],
+    [0.3, 0.0, 0.0, 0.03, 0.26, 0.0, 0.0, 0.0, 0.05, 0.0, 0.01, 0.35]
+])
+
+# MIMICRY matrix for windows pe created from windows clean and noisy data
+noise_transition_matrix = np.array([
+    [0.534045, 0.005340, 0.001335, 0.012016, 0.093458, 0.006676, 0.009346, 0.016021, 0.088117, 0.072096, 0.125501, 0.036048],
+    [0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.501524, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.498476, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.995006, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.004994],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.006250, 0.000000, 0.006250, 0.000000, 0.000000, 0.000000, 0.987500, 0.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000],
+    [0.000000, 0.000000, 0.000000, 0.019231, 0.730769, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.250000]
+])
+
+def introduce_noise(labels, features, noise_type, noise_rate):
+    if noise_type == 'uniform':
+        return introduce_uniform_noise(labels, noise_rate)
+    elif noise_type == 'class':
+        # Directly use the predefined matrix for class noise
+        return introduce_class_dependent_label_noise(labels, predefined_matrix, noise_rate)
+    elif noise_type == 'feature':
+        thresholds = calculate_feature_thresholds(features)
+        return introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5)
+    elif noise_type == 'MIMICRY':
+        # Directly use the predefined matrix for class noise
+        return introduce_mimicry_noise(labels, predefined_matrix, noise_rate)
+    else:
+        raise ValueError("Invalid noise type specified.")
+    
+def apply_data_augmentation(features, labels, augmentation_method):
+    try:
+        unique, counts = np.unique(labels, return_counts=True)
+        print(f"Class distribution before augmentation: {dict(zip(unique, counts))}")
+
+        if augmentation_method == 'smote':
+            min_samples = np.min(counts)
+            n_neighbors = min(5, min_samples - 1) if min_samples > 1 else 1
+            smote = SMOTE(random_state=42, k_neighbors=n_neighbors)
+            features, labels = smote.fit_resample(features, labels)
+        elif augmentation_method == 'undersampling':
+            rus = RandomUnderSampler(random_state=42)
+            features, labels = rus.fit_resample(features, labels)
+        elif augmentation_method == 'oversampling':
+            ros = RandomOverSampler(random_state=42)
+            features, labels = ros.fit_resample(features, labels)
+        elif augmentation_method == 'adasyn':
+            try:
+                min_samples = np.min(counts)
+                n_neighbors = min(5, min_samples - 1) if min_samples > 1 else 1
+                adasyn = ADASYN(random_state=42, n_neighbors=n_neighbors)
+                features, labels = adasyn.fit_resample(features, labels)
+            except RuntimeError as e:
+                print(f"ADASYN failed: {e}")
+                print("Falling back to SMOTE...")
+                min_samples = np.min(counts)
+                n_neighbors = min(5, min_samples - 1) if min_samples > 1 else 1
+                smote = SMOTE(random_state=42, k_neighbors=n_neighbors)
+                features, labels = smote.fit_resample(features, labels)
+
+        unique, counts = np.unique(labels, return_counts=True)
+        print(f"Class distribution after augmentation: {dict(zip(unique, counts))}")
+
+        return features, labels
+    except Exception as e:
+        print(f"Error during {augmentation_method}: {e}")
+        print("Returning original data without augmentation.")
+        return features, labels
+
+def introduce_uniform_noise(labels, noise_rate):
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
+
+    n_samples = len(labels)
+    n_noisy = int(noise_rate * n_samples)
+    noisy_indices = np.random.choice(np.arange(n_samples), size=n_noisy, replace=False)
+
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
+    unique_labels = np.unique(labels)
+
+    for idx in noisy_indices:
+        original_label = labels[idx]
+        possible_labels = np.delete(unique_labels, np.where(unique_labels == original_label))
+        new_label = np.random.choice(possible_labels)
+        new_labels[idx] = new_label
+        noise_or_not[idx] = True
+
+    return new_labels, noise_or_not
+
 def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'):
     # Convert labels to a numpy array if it's a tensor
     if isinstance(labels, torch.Tensor):
@@ -403,7 +351,7 @@ def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'
 
     # Normalize weights to sum to number of classes
     total_weight = np.sum(weights)
-    if (total_weight == 0):
+    if total_weight == 0:
         weights = np.ones(no_of_classes, dtype=np.float32)
     else:
         weights = (weights / total_weight) * no_of_classes
@@ -416,104 +364,92 @@ def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'
     
     return weight_per_label
 
+def calculate_feature_thresholds(features):
+    # Calculate thresholds for each feature, assuming features is a 2D array
+    thresholds = np.percentile(features, 50, axis=0)  # Median as threshold for each feature
+    return thresholds
 
-# Adjust learning rate and betas for Adam Optimizer
-mom1 = 0.9
-mom2 = 0.1
-alpha_plan = [learning_rate] * args.n_epoch
-beta1_plan = [mom1] * args.n_epoch
-for i in range(args.epoch_decay_start, args.n_epoch):
-    alpha_plan[i] = float(args.n_epoch - i) / (args.n_epoch - args.epoch_decay_start) * learning_rate
-    beta1_plan[i] = mom2
+def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)  # Return the original labels with no noise
 
-def adjust_learning_rate(optimizer, epoch):
-    for param_group in optimizer.param_groups:
-        param_group['lr']=alpha_plan[epoch]
-        param_group['betas']=(beta1_plan[epoch], 0.999) 
-       
-# define drop rate schedule
-def gen_forget_rate(fr_type='type_1'):
-    if fr_type=='type_1':
-        rate_schedule = np.ones(args.n_epoch)*forget_rate
-        rate_schedule[:args.num_gradual] = np.linspace(0, forget_rate, args.num_gradual)
-    return rate_schedule
+    n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
 
-rate_schedule = gen_forget_rate(args.fr_type)
-  
-save_dir = args.result_dir +'/' +args.dataset+'/%s/' % args.model_type
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
 
-if not os.path.exists(save_dir):
-    os.system('mkdir -p %s' % save_dir)
+    for idx in noisy_indices:
+        original_class = labels[idx]
+        new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
+        noise_or_not[idx] = new_labels[idx] != labels[idx]
 
-# Define model string including sample reweighting
-model_str = (
-    f"{args.model_type}_{args.dataset}_"
-    f"{'no_augmentation' if args.data_augmentation == 'none' else args.data_augmentation}_"
-    f"{args.noise_type}-noise{args.noise_rate}_imbalance{args.imbalance_ratio}_"
-    f"addNoise{args.feature_add_noise_level}_multNoise{args.feature_mult_noise_level}_"
-    f"{args.weight_resampling if args.weight_resampling != 'none' else 'no_weight_resampling'}"
-)
+    return new_labels, noise_or_not
 
-txtfile = save_dir + "/" + model_str + ".csv"
-nowTime = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
-if os.path.exists(txtfile):
-    os.system('mv %s %s' % (txtfile, txtfile + ".bak-%s" % nowTime))
+def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
 
-def accuracy(logit, target, topk=(1,)):
-    """Computes the precision@k for the specified values of k"""
-    output = F.softmax(logit, dim=1)
-    maxk = max(topk)
-    batch_size = target.size(0)
+    n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
 
-    _, pred = output.topk(maxk, 1, True, True)
-    pred = pred.t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
 
-    res = []
-    for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-        res.append(correct_k.mul_(100.0 / batch_size))
-    return res
+    for idx in noisy_indices:
+        original_class = labels[idx]
+        new_labels[idx] = np.random.choice(np.arange(len(class_noise_matrix[original_class])), p=class_noise_matrix[original_class])
+        noise_or_not[idx] = new_labels[idx] != labels[idx]
 
+    return new_labels, noise_or_not
 
-def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
-    model.train()  # Set model to training mode
-    train_total = 0
-    train_correct = 0
-    total_loss = 0
+def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5):
+    if noise_rate == 0:
+        return labels.copy(), np.zeros(len(labels), dtype=bool)
 
-    for i, (data, labels, _) in enumerate(train_loader):
-        data, labels = data.cuda(), labels.cuda()
-        logits = model(data)
+    knn = NearestNeighbors(n_neighbors=n_neighbors + 1)
+    knn.fit(features)
+    distances, indices = knn.kneighbors(features)
 
-        # Compute the standard CrossEntropyLoss
-        loss = criterion(logits, labels)
-        
-        # Apply weights manually if weight resampling is enabled
-        if args.weight_resampling != 'none':
-            weights = compute_weights(labels, no_of_classes=no_of_classes)
-            loss = (loss * weights).mean() 
+    n_samples = len(labels)
+    n_noisy = int(n_samples * noise_rate)
+    noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
 
-        # Backward pass and optimization
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    new_labels = labels.copy()
+    noise_or_not = np.zeros(n_samples, dtype=bool)
 
-        _, predicted = torch.max(logits.data, 1)
-        train_total += labels.size(0)
-        train_correct += (predicted == labels).sum().item()
-        total_loss += loss.item()
+    for i in noisy_indices:
+        neighbor_indices = indices[i][1:]
+        neighbor_classes = labels[neighbor_indices]
+        different_class_neighbors = neighbor_indices[neighbor_classes != labels[i]]
 
-        # if (i + 1) % args.print_freq == 0:
-        #     print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
-        #           % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
+        if len(different_class_neighbors) > 0:
+            chosen_neighbor = np.random.choice(different_class_neighbors)
+            new_label = labels[chosen_neighbor]
+            new_labels[i] = new_label
+            noise_or_not[i] = new_label != labels[i]
 
-    print('Epoch [%d/%d], Iter [%d/%d] Training Accuracy: %.4F, Loss: %.4f'
-                  % (epoch + 1, args.n_epoch, i + 1, len(train_loader), 100. * train_correct / train_total, total_loss / train_total))
+    return new_labels, noise_or_not
 
-    train_acc = 100. * train_correct / train_total
-    return train_acc
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    add_noise = np.zeros_like(x)
+    mult_noise = np.ones_like(x)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
 
+    if add_noise_level > 0.0:
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+    
+    return mult_noise * x + add_noise
 
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
@@ -522,19 +458,14 @@ def clean_class_name(class_name):
     cleaned_name = re.sub(r'\bweb attack\b', '', cleaned_name, flags=re.IGNORECASE)
     return cleaned_name.strip()  # Strip leading/trailing spaces
 
-def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, return_predictions=False):
-    model.eval()
+def evaluate(test_data, model, label_encoder, args, selected_feature_names, save_conf_matrix=False, return_predictions=False):
     all_preds = []
     all_labels = []
     
-    with torch.no_grad():
-        for data, labels, _ in test_loader:
-            data = data.cuda()
-            labels = labels.cuda()
-            outputs = model(data)
-            _, preds = torch.max(outputs, 1)
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+    dtest = xgb.DMatrix(test_data.features, feature_names=selected_feature_names)
+    predictions = model.predict(dtest)
+    all_preds = np.argmax(predictions, axis=1)
+    all_labels = test_data.labels
 
     if return_predictions:
         return all_preds
@@ -668,32 +599,52 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
 
     return metrics
 
+def hyperparameter_tuning(X_train, y_train, X_val, y_val):
+    param_dist = {
+        'max_depth': randint(3, 10),
+        'learning_rate': uniform(0.01, 0.3),
+        'n_estimators': randint(100, 1000),
+        'min_child_weight': randint(1, 10),
+        'subsample': uniform(0.5, 0.5),
+        'colsample_bytree': uniform(0.5, 0.5),
+        'gamma': uniform(0, 5),
+        'reg_alpha': uniform(0, 5),
+        'reg_lambda': uniform(0, 5)
+    }
 
-def weights_init(m):
-    if isinstance(m, nn.Linear):
-        # Apply custom initialization to linear layers
-        init.xavier_uniform_(m.weight.data)  # Xavier initialization for linear layers
-        if m.bias is not None:
-            init.constant_(m.bias.data, 0)    # Initialize bias to zero
+    xgb_model = XGBClassifier(
+        objective='multi:softprob',
+        tree_method='hist',
+        device='cuda' if torch.cuda.is_available() else 'cpu',
+        n_jobs=3,
+        random_state=42
+    )
 
-    elif isinstance(m, nn.Conv2d):
-        # Apply custom initialization to convolutional layers
-        init.kaiming_normal_(m.weight.data)   # Kaiming initialization for convolutional layers
-        if m.bias is not None:
-            init.constant_(m.bias.data, 0)     # Initialize bias to zero
+    random_search = RandomizedSearchCV(
+        xgb_model,
+        param_distributions=param_dist,
+        n_iter=50,
+        cv=3,
+        verbose=1,
+        random_state=42,
+        n_jobs=3  # Use all available cores for the search
+    )
 
-def handle_inf_nan(features_np):
-    print("Contains inf: ", np.isinf(features_np).any())
-    print("Contains -inf: ", np.isneginf(features_np).any())
-    print("Contains NaN: ", np.isnan(features_np).any())
-    features_np[np.isinf(features_np) | np.isneginf(features_np)] = np.nan
-    imputer = SimpleImputer(strategy='median')
-    features_np = imputer.fit_transform(features_np)
-    scaler = StandardScaler()
-    return scaler.fit_transform(features_np)
+    random_search.fit(X_train, y_train, eval_set=[(X_val, y_val)], early_stopping_rounds=50, verbose=False)
+
+    print("Best parameters found:")
+    print(random_search.best_params_)
+    print("Best score:")
+    print(random_search.best_score_)
+
+    return random_search.best_estimator_
 
 
 def main():
+    
+    # Add this print statement to check CUDA usage
+    print(f"CUDA is {'available' if torch.cuda.is_available() else 'not available'}.")
+
     print(model_str)
     print(model_str)
     print(model_str)
@@ -740,31 +691,36 @@ def main():
         # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
-    # Directory for validation and full dataset evaluation results
+      # Directory for validation and full dataset evaluation results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
 
-    # File paths for CSV and model files
-    validation_metrics_file = os.path.join(results_dir, f"{model_str}_validation.csv")
     full_dataset_metrics_file = os.path.join(results_dir, f"{model_str}_full_dataset.csv")
     final_model_path = os.path.join(results_dir, f"{model_str}_final_model.pth")
 
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(full_dataset_metrics_file), exist_ok=True)
+
     # Prepare CSV file for validation metrics
-    with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
-        if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
-        elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in label_encoder.classes_]
-        elif args.dataset == 'windows_pe_real':
-            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-                    "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
+    try:
+        with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
+            if args.dataset == 'BODMAS':
+                fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
+                            [f'Class {label+1}_acc' for label in label_encoder.classes_]
+            elif args.dataset == 'CIC_IDS_2017':
+                fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
+                            [f'{label}_acc' for label in label_encoder.classes_]
+            elif args.dataset == 'windows_pe_real':
+                labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
+                        "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                        "InstallMonster", "Locky"]
+                fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
+                            [f'{label}_acc' for label in labels]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+        print(f"CSV file created successfully at {full_dataset_metrics_file}")
+    except Exception as e:
+        print(f"Error creating CSV file: {e}")
 
     # Prepare CSV file for validation metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
@@ -793,7 +749,7 @@ def main():
     X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
 
     # Print class distribution after applying imbalance
-    print("Before introducing noise:")
+    print("After applying imbalance:")
     print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
     print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
     print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
@@ -802,21 +758,21 @@ def main():
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
     # Apply feature noise
-    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+    X_train_noisy = feature_noise(X_train_imbalanced, add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level)
 
     # Print class distribution after introducing noise
-    print("Before augmentation:")
-    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+    print("After introducing noise:")
+    print(f"Length of X_train_noisy: {len(X_train_noisy)}")
     print(f"Length of y_train_noisy: {len(y_train_noisy)}")
     print(f"Length of noise_or_not: {len(noise_or_not)}")
     print("Class distribution after introducing noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
 
     # Apply data augmentation to the noisy data
-    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
+    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_noisy, y_train_noisy, args.data_augmentation)
 
     if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
         # Recalculate noise_or_not to match the augmented data size
-        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
+        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
 
     # Print class distribution after data augmentation
     print("After augmentation:")
@@ -824,94 +780,111 @@ def main():
     print(f"Length of y_train_augmented: {len(y_train_augmented)}")
     print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
     print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
-    
 
-    # Cross-validation training
-    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
-    results = []
-    fold = 0
-    for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
-        # print(f"Max train_idx: {max(train_idx)}, Max val_idx: {max(val_idx)}")  # Debug indices
-        if max(train_idx) >= len(noise_or_not) or max(val_idx) >= len(noise_or_not):
-            print("IndexError: Index is out of bounds for noise_or_not array.")
-            continue  
-        fold += 1
-        X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
-        y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
-        noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
+    # Apply robust scaling
+    scaler = RobustScaler()
+    X_scaled = scaler.fit_transform(X_train_augmented)
 
-        train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+    # Re-encode labels
+    le = LabelEncoder()
+    all_labels = np.concatenate([y_train_augmented, y_clean_test])
+    le.fit(all_labels)
+    y_train = le.transform(y_train_augmented)
+    y_clean_test_encoded = le.transform(y_clean_test)
 
-        # Use clean data for validation - separate clean validation data not affected by noise or augmentation
-        val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))  # Assuming this is your clean data reserved for validation
-        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+    print("Unique labels after re-encoding:", np.unique(y_train))
+    print("Unique labels in test set:", np.unique(y_clean_test_encoded))
 
-        model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
-        model.apply(weights_init)
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        criterion = nn.CrossEntropyLoss()
-
-        for epoch in range(args.n_epoch):
-            train(train_loader, model, optimizer, criterion, epoch, len(np.unique(y_train_fold)))
-            metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
-
-            # Update metrics with Fold and Epoch at the beginning
-            row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
-            with open(validation_metrics_file, "a", newline='',encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writerow(row_data)
-
-    print("Training completed. Results from all folds:")
-    for i, result in enumerate(results, 1):
-        print(f'Results Fold {i}:', result)
-
-    # Full dataset training
-    print("Training on the full dataset...")
-    # Prepare the full augmented dataset for training
-    full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
-    full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-
-    # Prepare the full model
-    full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
-    full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    full_criterion = CrossEntropyLoss()
-
-    # Train on the full augmented dataset
-    print("Training on the full augmented dataset...")
-    for epoch in range(args.n_epoch):
-        train(full_train_loader, full_model, full_optimizer, full_criterion, epoch, len(np.unique(y_train_augmented)))
+    # In the main function, update the XGBoost parameters:
+    params = {
+        'objective': 'multi:softprob',
+        'num_class': len(le.classes_),
+        'learning_rate': 0.01,
+        'max_depth': 6,
+        'min_child_weight': 1,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8,
+        'reg_lambda': 100.0,  # L2 regularization
+        'eval_metric': ['mlogloss', 'merror'],
+        'tree_method': 'hist',
+        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+        'n_jobs': 3,
+        'random_state': 42
+    }
 
 
-    # Prepare clean data for evaluation
-    clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
-    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+    # Add this print statement to check CUDA usage
+    print(f"CUDA is {'available' if torch.cuda.is_available() else 'not available'}.")
+    print(f"XGBoost will use: {params['device']}")
 
-    # Evaluate the full model on clean dataset and save predictions
+    # Prepare datasets for XGBoost
+    dtrain_full = xgb.DMatrix(X_scaled, label=y_train)
+    X_train, X_val, y_train, y_val = train_test_split(X_scaled, y_train, test_size=0.2, random_state=42)
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dval = xgb.DMatrix(X_val, label=y_val)
+
+    # Train the model (in main function)
+    print("Training XGBoost model...")
+    evals_result = {}
+    full_model = xgb.train(
+        params, 
+        dtrain_full, 
+        num_boost_round=10000,
+        evals=[(dtrain, 'train'), (dval, 'val')],
+        evals_result=evals_result,
+        verbose_eval=100,
+        early_stopping_rounds=200
+    )
+    # Print final training and validation metrics
+    train_error = evals_result['train']['merror'][-1]
+    val_error = evals_result['val']['merror'][-1]
+    print(f"Final training error: {train_error:.4f}")
+    print(f"Final validation error: {val_error:.4f}")
+    print(f"Final training accuracy: {1-train_error:.4f}")
+    print(f"Final validation accuracy: {1-val_error:.4f}")
+
+    # Evaluate on clean test set
+    X_clean_test_scaled = scaler.transform(X_clean_test)
+    dtest = xgb.DMatrix(X_clean_test_scaled, label=y_clean_test_encoded)
+    clean_test_dataset = CICIDSDataset(X_clean_test_scaled, y_clean_test_encoded, np.zeros_like(y_clean_test_encoded, dtype=bool))
+
     print("Evaluating on clean dataset...")
-    full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
-    predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
+    full_metrics = evaluate(clean_test_dataset, full_model, label_encoder, args, None, save_conf_matrix=True)
+    predictions = evaluate(clean_test_dataset, full_model, label_encoder, args, None, return_predictions=True)
+
+    # Print clean test set metrics
+    print("Clean Test Set Metrics:")
+    for metric, value in full_metrics.items():
+        print(f"{metric}: {value:.4f}")
 
     # Save predictions
     predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
     os.makedirs(predictions_dir, exist_ok=True)
     predictions_filename = os.path.join(predictions_dir, f"{args.dataset}_final_predictions.csv")
-    with open(predictions_filename, 'w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Predicted Label'])
-        for pred in predictions:
-            writer.writerow([pred])
-
-    print(f"Predictions saved to {predictions_filename}")
+    try:
+        with open(predictions_filename, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Predicted Label'])
+            for pred in predictions:
+                writer.writerow([pred])
+        print(f"Predictions saved to {predictions_filename}")
+    except Exception as e:
+        print(f"Error saving predictions: {e}")
 
     # Record the evaluation results
-    row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', epoch)] + list(full_metrics.items()))
-    with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writerow(row_data)
+    row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', 'Final')] + list(full_metrics.items()))
+    try:
+        with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writerow(row_data)
+        print(f"Results saved to {full_dataset_metrics_file}")
+    except Exception as e:
+        print(f"Error saving results: {e}")
 
     print("Final evaluation completed.")
+    sys.stdout.flush()
 
 if __name__ == '__main__':
+    print("Starting the program...")
     main()
+    print("Program execution completed.")
