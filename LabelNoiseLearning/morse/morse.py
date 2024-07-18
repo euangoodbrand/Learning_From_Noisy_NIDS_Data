@@ -115,7 +115,7 @@ parser.add_argument('--threshold', default=0.40, type=float, # 0.95 for malware-
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
 parser.add_argument('--weight_decay_l2', type=float, default=0.0, help='Weight decay for L2 regularization. Default is 0 (no regularization).')
-               
+parser.add_argument('--num_runs', type=int, default=1, help='Number of times to run the experiment')     
 args = parser.parse_args()
 
 
@@ -377,6 +377,7 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
     if ratio >= 1:
         raise ValueError("Imbalance ratio must be less than 1.")
 
+
     # Identify the unique classes and their counts
     unique, counts = np.unique(labels, return_counts=True)
     n_classes = len(unique)
@@ -399,19 +400,17 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
     
     indices_to_keep = []
     for cls in unique:
-        class_indices = np.where(labels == cls)[0]
-        if cls in downsample_classes:
-            # Calculate the target count for downsampled classes
-            n_majority_new = max(int(average_keep_class_count * ratio), min_samples_per_class)
-            if len(class_indices) > n_majority_new:
+            class_indices = np.where(labels == cls)[0]
+            if cls in downsample_classes:
+                # Calculate the target count for downsampled classes
+                n_majority_new = max(int(average_keep_class_count * ratio), min_samples_per_class)
+                n_majority_new = min(len(class_indices), n_majority_new)  # Ensure we don't try to keep more than available
                 keep_indices = np.random.choice(class_indices, n_majority_new, replace=False)
             else:
-                keep_indices = class_indices  # Keep all samples if class count is below the target
-        else:
-            # Keep all samples from the classes not being downsampled
-            keep_indices = class_indices
+                # Keep all samples from the classes not being downsampled
+                keep_indices = class_indices
 
-        indices_to_keep.extend(keep_indices)
+            indices_to_keep.extend(keep_indices)
 
     indices_to_keep = np.array(indices_to_keep)
     np.random.shuffle(indices_to_keep)  # Shuffle indices to mix classes
@@ -863,7 +862,6 @@ def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb
     print('Epoch [%3d/%3d] Loss: %.2f' % (epoch, args.n_epoch, losses.avg))
 
 
-
 def main():
     print(model_str)
     label_encoder = LabelEncoder()
@@ -914,226 +912,147 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     # File paths for CSV and model files
-    validation_metrics_file = os.path.join(results_dir, f"{model_str}_validation.csv")
     full_dataset_metrics_file = os.path.join(results_dir, f"{model_str}_full_dataset.csv")
-    final_model_path = os.path.join(results_dir, f"{model_str}_final_model.pth")
 
-    # Prepare CSV file for validation metrics
-    with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
-        if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
-        elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in label_encoder.classes_]
-        elif args.dataset == 'windows_pe_real':
-            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-                    "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-    # Prepare CSV file for validation metrics
+    # Prepare CSV file for full dataset metrics
     with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
         if args.dataset == 'BODMAS':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
+            fieldnames = ['Run', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'Class {label+1}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
+            fieldnames = ['Run', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'{label}_acc' for label in label_encoder.classes_]
         elif args.dataset == 'windows_pe_real':
             labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
                     "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
                     "InstallMonster", "Locky"]
-            fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
+            fieldnames = ['Run', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
                         [f'{label}_acc' for label in labels]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-    # Print the original dataset sizes and class distribution
-    print("Original dataset:")
-    print(f"Length of X_train: {len(X_train)}")
-    print(f"Length of y_train: {len(y_train)}")
-    print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
+    all_runs_metrics = []
 
-    # Apply imbalance to the training dataset
-    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+    for run in range(args.num_runs):
+        print(f"Starting run {run + 1} of {args.num_runs}")
 
-    # Print class distribution after applying imbalance
-    print("Before introducing noise:")
-    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-    print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
-    print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
+        # Reset random seeds for reproducibility across runs
+        torch.manual_seed(args.seed + run)
+        torch.cuda.manual_seed(args.seed + run)
+        np.random.seed(args.seed + run)
 
-    # Introduce noise to the imbalanced data
-    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+        # Print the original dataset sizes and class distribution
+        print("Original dataset:")
+        print(f"Length of X_train: {len(X_train)}")
+        print(f"Length of y_train: {len(y_train)}")
+        print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
 
-    # Apply feature noise
-    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+        # Apply imbalance to the training dataset
+        X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
 
-    # Print class distribution after introducing noise
-    print("Before augmentation:")
-    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-    print(f"Length of y_train_noisy: {len(y_train_noisy)}")
-    print(f"Length of noise_or_not: {len(noise_or_not)}")
-    print("Class distribution after introducing noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
+        # Print class distribution after applying imbalance
+        print("Before introducing noise:")
+        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+        print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
+        print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
 
-    # Apply data augmentation to the noisy data
-    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
+        # Introduce noise to the imbalanced data
+        y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
 
-    if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
-        # Recalculate noise_or_not to match the augmented data size
-        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
+        # Apply feature noise
+        X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
 
-    # Print class distribution after data augmentation
-    print("After augmentation:")
-    print(f"Length of X_train_augmented: {len(X_train_augmented)}")
-    print(f"Length of y_train_augmented: {len(y_train_augmented)}")
-    print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
-    print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
-    
-    if args.dataset == 'BODMAS':
-        milestones = [5, 30, 60] if args.noise_rate == 0.6 else [30, 60]
-    else:
-        milestones = [10, 60, 90]
+        # Print class distribution after introducing noise
+        print("Before augmentation:")
+        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+        print(f"Length of y_train_noisy: {len(y_train_noisy)}")
+        print(f"Length of noise_or_not: {len(noise_or_not)}")
+        print("Class distribution after introducing noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
 
-    # Dynamically calculate the number of classes
-    args.num_class = len(np.unique(y_train))
-    print(f"Number of classes: {args.num_class}")
+        # Apply data augmentation to the noisy data
+        X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
 
-    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
-    fold = 0
+        if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
+            # Recalculate noise_or_not to match the augmented data size
+            noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
 
-    # Define a suitable value for gamma
-    gamma = 0.1  # You can adjust this value as needed
-    # Initialize the threshold object with gamma
-    threshold = dynamic_threshold(args.threshold, args.num_class, gamma)  # Initialize the threshold object
+        # Print class distribution after data augmentation
+        print("After augmentation:")
+        print(f"Length of X_train_augmented: {len(X_train_augmented)}")
+        print(f"Length of y_train_augmented: {len(y_train_augmented)}")
+        print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
+        print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
+        
+        if args.dataset == 'BODMAS':
+            milestones = [5, 30, 60] if args.noise_rate == 0.6 else [30, 60]
+        else:
+            milestones = [10, 60, 90]
 
-    # for train_idx, val_idx in skf.split(X_train_augmented, y_train_augmented):
-    #     if max(train_idx) >= len(noise_or_not) or max(val_idx) >= len(noise_or_not):
-    #         print("IndexError: Index is out of bounds for noise_or_not array.")
-    #         continue
-    #     fold += 1
-    #     X_train_fold, X_val_fold = X_train_augmented[train_idx], X_train_augmented[val_idx]
-    #     y_train_fold, y_val_fold = y_train_augmented[train_idx], y_train_augmented[val_idx]
-    #     noise_or_not_train, noise_or_not_val = noise_or_not[train_idx], noise_or_not[val_idx]
+        # Dynamically calculate the number of classes
+        args.num_class = len(np.unique(y_train))
+        print(f"Number of classes: {args.num_class}")
 
-    #     train_dataset = CICIDSDataset(X_train_fold, y_train_fold, noise_or_not_train)
-    #     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+        # Define a suitable value for gamma
+        gamma = 0.1  # You can adjust this value as needed
+        # Initialize the threshold object with gamma
+        threshold = dynamic_threshold(args.threshold, args.num_class, gamma)  # Initialize the threshold object
 
-    #     val_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros(len(y_clean_test), dtype=bool))
-    #     val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+        # Full dataset training
+        print("Training on the full dataset...")
+        # Prepare the full augmented dataset for training
+        full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
+        full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
 
-    #     model = MLPNet(num_features=X_train_fold.shape[1], num_classes=len(np.unique(y_train_fold)), dataset=args.dataset).cuda()
-    #     model.apply(weights_init)
+        # Prepare the full model
+        full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
+        full_model.apply(weights_init)
+        full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay_l2)
+        full_criterion = CrossEntropyLoss()
 
-    #     # Define the optimizer and criterion after model initialization
-    #     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay_l2)
-    #     criterion = nn.CrossEntropyLoss()
+        # Initialize prev_labels and prev_labels_idx
+        prev_labels = torch.zeros((args.dist_alignment_batches, args.num_class)).cuda()
+        prev_labels_idx = 0
 
-    #     # Initialize the learning rate scheduler
-    #     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.3, last_epoch=-1)
+        # Train on the full augmented dataset
+        print("Training on the full augmented dataset...")
+        for epoch in range(args.n_epoch):
+            labeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+            unlabeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
+            imb_labeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
 
-    #     best_acc = 0.0
+            # Ensure prev_labels and prev_labels_idx are passed
+            ourmatch_train(epoch, full_train_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, full_model, full_optimizer, full_criterion, args, threshold, prev_labels, prev_labels_idx)
 
+        # Prepare clean data for evaluation
+        clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
+        clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-    #     # Create a directory to save the models
-    #     saved_models_dir = os.path.join(results_dir, 'saved_models')
-    #     os.makedirs(saved_models_dir, exist_ok=True)
+        # Evaluate the full model on clean dataset and save predictions
+        print("Evaluating on clean dataset...")
+        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=(run == args.num_runs - 1))
+        
+        all_runs_metrics.append(full_metrics)
 
-    #     # Initialize prev_labels and prev_labels_idx
-    #     prev_labels = torch.zeros((args.dist_alignment_batches, args.num_class)).cuda()
-    #     prev_labels_idx = 0
+        # Record the evaluation results for this run
+        row_data = OrderedDict([('Run', run + 1), ('Epoch', args.n_epoch)] + list(full_metrics.items()))
+        with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writerow(row_data)
 
-    #     for epoch in range(args.n_epoch):
-    #         if epoch < args.warmup:
-    #             warmup(epoch, train_loader, model, optimizer)
-    #         else:
-    #             labeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-    #             unlabeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-    #             imb_labeled_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
+        print(f"Run {run + 1} completed.")
 
-    #             # Ensure prev_labels and prev_labels_idx are passed
-    #             ourmatch_train(epoch, train_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, model, optimizer, criterion, args, threshold, prev_labels, prev_labels_idx)
+    # Calculate and save average metrics
+    avg_metrics = {}
+    for key in all_runs_metrics[0].keys():
+        avg_metrics[key] = sum(run_metrics[key] for run_metrics in all_runs_metrics) / args.num_runs
 
-    #         adjust_learning_rate(optimizer, epoch)  # Adjust learning rate before evaluation
-    #         metrics = evaluate(val_loader, model, label_encoder, args, save_conf_matrix=False)
-
-    #         # Update metrics with Fold and Epoch at the beginning
-    #         row_data = OrderedDict([('Fold', fold), ('Epoch', epoch)] + list(metrics.items()))
-    #         with open(validation_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
-    #             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    #             writer.writerow(row_data)
-
-    #         if metrics['accuracy'] > best_acc:
-    #             best_acc = metrics['accuracy']
-    #             # Save the best model in the created folder
-    #             torch.save(model.state_dict(), os.path.join(saved_models_dir, f"{model_str}_best_model_fold{fold}.pth"))
-
-    #     lr_scheduler.step()  # Step the learning rate scheduler after each epoch
-
-
-    #     print(f"Fold {fold} completed.")
-
-    # print("Training completed.")
-
-
-    # Full dataset training
-    print("Training on the full dataset...")
-    # Prepare the full augmented dataset for training
-    full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
-    full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-
-    # Prepare the full model
-    full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
-    full_model.apply(weights_init)
-    full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay_l2)
-    full_criterion = CrossEntropyLoss()
-
-    # Initialize prev_labels and prev_labels_idx
-    prev_labels = torch.zeros((args.dist_alignment_batches, args.num_class)).cuda()
-    prev_labels_idx = 0
-
-    # Train on the full augmented dataset
-    print("Training on the full augmented dataset...")
-    for epoch in range(args.n_epoch):
-        labeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-        unlabeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-        imb_labeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-
-        # Ensure prev_labels and prev_labels_idx are passed
-        ourmatch_train(epoch, full_train_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, full_model, full_optimizer, full_criterion, args, threshold, prev_labels, prev_labels_idx)
-
-    # Prepare clean data for evaluation
-    clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
-    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
-
-    # Evaluate the full model on clean dataset and save predictions
-    print("Evaluating on clean dataset...")
-    full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=True)
-    predictions = evaluate(clean_test_loader, full_model, label_encoder, args, return_predictions=True)
-
-    # Save predictions
-    predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
-    os.makedirs(predictions_dir, exist_ok=True)
-    predictions_filename = os.path.join(predictions_dir, f"{args.dataset}_final_predictions.csv")
-    with open(predictions_filename, 'w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Predicted Label'])
-        for pred in predictions:
-            writer.writerow([pred])
-
-    print(f"Predictions saved to {predictions_filename}")
-
-    # Record the evaluation results
-    row_data = OrderedDict([('Fold', 'Full Dataset'), ('Epoch', epoch)] + list(full_metrics.items()))
+    # Save average results
+    row_data = OrderedDict([('Run', 'Average'), ('Epoch', args.n_epoch)] + list(avg_metrics.items()))
     with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerow(row_data)
 
-    print("Final evaluation completed.")
+    print("All runs completed. Average results saved.")
 
 if __name__ == '__main__':
     main()
