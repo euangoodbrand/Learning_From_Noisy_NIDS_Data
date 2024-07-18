@@ -84,7 +84,7 @@ parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help=
 parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay for L2 regularization. Default is 0 (no regularization).')
 
 
-parser.add_argument('--num_runs', type=int, default=1, help='Number of runs to perform')
+parser.add_argument('--num_runs', type=int, default=5, help='Number of runs to perform')
 parser.add_argument('--hyperparameter_search', action='store_true', help='Perform hyperparameter search')
 parser.add_argument('--lr_range', type=float, nargs=2, default=[0.0001, 0.01], help='Learning rate range for search')
 parser.add_argument('--batch_size_range', type=int, nargs=2, default=[64, 256], help='Batch size range for search')
