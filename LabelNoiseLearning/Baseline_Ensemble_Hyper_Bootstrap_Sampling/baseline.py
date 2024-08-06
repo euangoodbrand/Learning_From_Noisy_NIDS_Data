@@ -51,9 +51,11 @@ import copy
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader
 
+
 for dirname, _, filenames in os.walk('/data'):
     for filename in filenames:
         print(os.path.join(dirname, filename))
+
 
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
@@ -81,6 +83,8 @@ parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'F
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
 parser.add_argument('--weight_decay', type=float, default=0.0, help='L2 regularization weight decay. Default is 0 (no regularization).')
+
+
 args = parser.parse_args()
 
 # Seed
@@ -123,6 +127,7 @@ if args.forget_rate is None:
 else:
     forget_rate=args.forget_rate
 
+
 def introduce_noise(labels, features, noise_type, noise_rate):
     if noise_type == 'uniform':
         return introduce_uniform_noise(labels, noise_rate)
@@ -137,6 +142,7 @@ def introduce_noise(labels, features, noise_type, noise_rate):
         return introduce_mimicry_noise(labels, predefined_matrix, noise_rate)
     else:
         raise ValueError("Invalid noise type specified.")
+
 
 def apply_data_augmentation(features, labels, augmentation_method):
     try:
@@ -171,6 +177,8 @@ def apply_data_augmentation(features, labels, augmentation_method):
     except NotFittedError as e:
         print(f"Model fitting error with {augmentation_method}: {e}")
         return features, labels
+
+
 
 # Class dependant noise matrix, from previous evaluation run.
 predefined_matrix = np.array([
@@ -247,6 +255,7 @@ def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate
 
     return new_labels, noise_or_not
 
+
 def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
     if noise_rate == 0:
         return labels.copy(), np.zeros(len(labels), dtype=bool)
@@ -265,10 +274,12 @@ def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
 
     return new_labels, noise_or_not
 
+
 def calculate_feature_thresholds(features):
     # Calculate thresholds for each feature, assuming features is a 2D array
     thresholds = np.percentile(features, 50, axis=0)  # Median as threshold for each feature
     return thresholds
+
 
 def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5):
     if noise_rate == 0:
@@ -283,7 +294,7 @@ def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neig
     noisy_indices = np.random.choice(n_samples, size=n_noisy, replace=False)
 
     new_labels = labels.copy()
-    noise_or_not = np.zeros(n_samples, dtype=bool)
+    noise_or_not = np.zeros(len(labels), dtype=bool)
 
     for i in noisy_indices:
         neighbor_indices = indices[i][1:]
@@ -298,6 +309,8 @@ def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neig
 
     return new_labels, noise_or_not
 
+
+
 def introduce_uniform_noise(labels, noise_rate):
     if noise_rate == 0:
         return labels.copy(), np.zeros(len(labels), dtype=bool)
@@ -307,7 +320,7 @@ def introduce_uniform_noise(labels, noise_rate):
     noisy_indices = np.random.choice(np.arange(n_samples), size=n_noisy, replace=False)
 
     new_labels = labels.copy()
-    noise_or_not = np.zeros(n_samples, dtype=bool)
+    noise_or_not = np.zeros(len(labels), dtype=bool)
     unique_labels = np.unique(labels)
 
     for idx in noisy_indices:
@@ -318,6 +331,7 @@ def introduce_uniform_noise(labels, noise_rate):
         noise_or_not[idx] = True
 
     return new_labels, noise_or_not
+
 
 def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample_half=True):
     if ratio == 0:
@@ -407,6 +421,7 @@ def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'
     
     return weight_per_label
 
+
 # Adjust learning rate and betas for Adam Optimizer
 mom1 = 0.9
 mom2 = 0.1
@@ -465,6 +480,7 @@ def accuracy(logit, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
+
 def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
     model.train()  # Set model to training mode
     train_total = 0
@@ -502,6 +518,7 @@ def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
 
     train_acc = 100. * train_correct / train_total
     return train_acc
+
 
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
@@ -545,6 +562,7 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
             
     cleaned_class_names = [clean_class_name(name) for name in index_to_class_name.values()]
     
+
     metrics = {
         'accuracy': accuracy_score(all_labels, all_preds),
         'balanced_accuracy': balanced_accuracy_score(all_labels, all_preds),
@@ -555,7 +573,8 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         'f1_average': np.mean(f1_score(all_labels, all_preds, average=None, zero_division=0))  # Average F1 score
     }
 
-    # Class accuracy
+
+     # Class accuracy
     if args.dataset == 'CIC_IDS_2017':
         unique_labels = np.unique(all_labels)
         class_accuracy = {f'{label_encoder.inverse_transform([label])[0]}_acc': np.mean([all_preds[i] == label for i, lbl in enumerate(all_labels) if lbl == label]) for label in unique_labels}
@@ -576,6 +595,7 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
             ]) for label in unique_labels
         }
         metrics.update(class_accuracy)
+
 
     if save_conf_matrix:
 
@@ -653,6 +673,7 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
 
     return metrics
 
+
 def weights_init(m):
     if isinstance(m, nn.Linear):
         # Apply custom initialization to linear layers
@@ -675,6 +696,29 @@ def handle_inf_nan(features_np):
     features_np = imputer.fit_transform(features_np)
     scaler = StandardScaler()
     return scaler.fit_transform(features_np)
+
+def bootstrap_sample(X, y, noise_or_not):
+    n_samples = X.shape[0]
+    indices = np.random.choice(np.arange(n_samples), size=n_samples, replace=True)
+    X_bootstrap = X[indices]
+    y_bootstrap = y[indices]
+    noise_or_not_bootstrap = noise_or_not[indices]
+
+    # Ensure at least one representation of each class in the bootstrap sample
+    unique_classes = np.unique(y)
+    for cls in unique_classes:
+        if cls not in y_bootstrap:
+            # Find indices of this class in the original dataset
+            class_indices = np.where(y == cls)[0]
+            if len(class_indices) > 0:
+                # Randomly choose one index from the class_indices
+                random_index = np.random.choice(class_indices)
+                replace_index = np.random.choice(np.arange(n_samples))
+                X_bootstrap[replace_index] = X[random_index]
+                y_bootstrap[replace_index] = y[random_index]
+                noise_or_not_bootstrap[replace_index] = noise_or_not[random_index]
+
+    return X_bootstrap, y_bootstrap, noise_or_not_bootstrap
 
 def train_single_mlp(X_train, y_train, noise_or_not, X_val, y_val, args, label_encoder):
     train_dataset = CICIDSDataset(X_train, y_train, noise_or_not)
@@ -715,12 +759,11 @@ def ensemble_predict(models, X):
     return ensemble_preds
 
 def main():
-    print(f"Starting experiment: {model_str}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
-
+    print(model_str)
+    print(model_str)
+    print(model_str)
     label_encoder = LabelEncoder()
 
-    # Load and preprocess data based on the dataset
     if args.dataset == 'CIC_IDS_2017':
         preprocessed_file_path = 'data/final_dataframe.csv'
         if not os.path.exists(preprocessed_file_path):
@@ -735,6 +778,7 @@ def main():
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
         features_np = handle_inf_nan(features_np)
 
+        # Splitting the data into training, test, and a clean test set
         X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
         X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
@@ -758,57 +802,101 @@ def main():
         y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
         
+        # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
 
-    else:
-        raise ValueError(f"Unsupported dataset: {args.dataset}")
+    # Directory for validation and full dataset evaluation results
+    results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
+    os.makedirs(results_dir, exist_ok=True)
 
-    # Print original dataset information
+    # File paths for CSV and model files
+    validation_metrics_file = os.path.join(results_dir, f"{model_str}_validation.csv")
+    full_dataset_metrics_file = os.path.join(results_dir, f"{model_str}_full_dataset.csv")
+    final_model_path = os.path.join(results_dir, f"{model_str}_final_model.pth")
+
+    # Prepare CSV file for validation metrics
+    with open(validation_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
+        if args.dataset == 'BODMAS':
+            class_fieldnames = [f'Class_{label + 1}_acc' for label in np.unique(y_clean_test)]
+        elif args.dataset == 'CIC_IDS_2017':
+            class_fieldnames = [f'{label}_acc' for label in label_encoder.classes_]
+        elif args.dataset == 'windows_pe_real':
+            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
+                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                    "InstallMonster", "Locky"]
+            class_fieldnames = [f'{label}_acc' for label in labels]
+        
+        fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + class_fieldnames
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+    # Prepare CSV file for validation metrics
+    with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
+        if args.dataset == 'BODMAS':
+            class_fieldnames = [f'Class_{label + 1}_acc' for label in np.unique(y_clean_test)]
+        elif args.dataset == 'CIC_IDS_2017':
+            class_fieldnames = [f'{label}_acc' for label in label_encoder.classes_]
+        elif args.dataset == 'windows_pe_real':
+            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
+                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                    "InstallMonster", "Locky"]
+            class_fieldnames = [f'{label}_acc' for label in labels]
+        
+        fieldnames = ['Fold', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro', 'f1_average'] + class_fieldnames
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+
+    # Print the original dataset sizes and class distribution
     print("Original dataset:")
     print(f"Length of X_train: {len(X_train)}")
     print(f"Length of y_train: {len(y_train)}")
     print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
 
-    # Apply imbalance
+    # Apply imbalance to the training dataset
     X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
-    print("\nAfter applying imbalance:")
+
+    # Print class distribution after applying imbalance
+    print("Before introducing noise:")
     print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
     print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
-    print("Class distribution after imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
+    print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
 
-    # Introduce noise
+    # Introduce noise to the imbalanced data
     y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
-    
-    # Apply feature noise
-    X_train_noisy = feature_noise(torch.tensor(X_train_imbalanced), 
-                                  add_noise_level=args.feature_add_noise_level, 
-                                  mult_noise_level=args.feature_mult_noise_level).numpy()
 
-    print("\nAfter introducing noise:")
-    print(f"Length of X_train_noisy: {len(X_train_noisy)}")
+    # Apply feature noise
+    X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
+
+    # Print class distribution after introducing noise
+    print("Before augmentation:")
+    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
     print(f"Length of y_train_noisy: {len(y_train_noisy)}")
     print(f"Length of noise_or_not: {len(noise_or_not)}")
-    print("Class distribution after noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
+    print("Class distribution after introducing noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
 
-    # Apply data augmentation
-    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_noisy, y_train_noisy, args.data_augmentation)
+    # Apply data augmentation to the noisy data
+    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
 
     if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
-        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
+        # Recalculate noise_or_not to match the augmented data size
+        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
 
-    print("\nAfter data augmentation:")
+    # Print class distribution after data augmentation
+    print("After augmentation:")
     print(f"Length of X_train_augmented: {len(X_train_augmented)}")
     print(f"Length of y_train_augmented: {len(y_train_augmented)}")
-    print(f"Length of noise_or_not: {len(noise_or_not)}")
-    print("Class distribution after augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
+    print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
+    print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
     # Train ensemble of MLPs
     num_models = 5
     ensemble_models = []
     
     for i in range(num_models):
-        print(f"\nTraining MLP model {i+1}/{num_models}")
-        model = train_single_mlp(X_train_augmented, y_train_augmented, noise_or_not, X_clean_test, y_clean_test, args, label_encoder)
+        print(f"Training MLP model {i+1}/{num_models}")
+        X_train_bootstrap, y_train_bootstrap, noise_or_not_bootstrap = bootstrap_sample(X_train_augmented, y_train_augmented, noise_or_not)
+        model = train_single_mlp(X_train_bootstrap, y_train_bootstrap, noise_or_not_bootstrap, X_clean_test, y_clean_test, args, label_encoder)
         ensemble_models.append(model)
 
     # Prepare clean data for evaluation
@@ -816,11 +904,11 @@ def main():
     clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
     # Evaluate the ensemble on clean dataset
-    print("\nEvaluating ensemble on clean dataset...")
+    print("Evaluating ensemble on clean dataset...")
     ensemble_predictions = ensemble_predict(ensemble_models, X_clean_test)
     
     # Calculate metrics
-    metrics = {
+    full_metrics = {
         'accuracy': accuracy_score(y_clean_test, ensemble_predictions),
         'balanced_accuracy': balanced_accuracy_score(y_clean_test, ensemble_predictions),
         'precision_macro': precision_score(y_clean_test, ensemble_predictions, average='macro', zero_division=0),
@@ -842,32 +930,28 @@ def main():
                   "InstallMonster", "Locky"]
         class_accuracy = {f'{labels[label]}_acc': np.mean(ensemble_predictions[y_clean_test == label] == label) for label in unique_labels}
     
-    metrics.update(class_accuracy)
+    full_metrics.update(class_accuracy)
 
-    # Print metrics
-    print("\nFinal Metrics:")
-    for key, value in metrics.items():
-        print(f"{key}: {value}")
+    # Save predictions
+    predictions_dir = os.path.join(args.result_dir, args.dataset, 'predictions')
+    os.makedirs(predictions_dir, exist_ok=True)
+    predictions_filename = os.path.join(predictions_dir, f"{args.dataset}_ensemble_predictions.csv")
+    with open(predictions_filename, 'w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Predicted Label'])
+        for pred in ensemble_predictions:
+            writer.writerow([pred])
 
-    # Save results
-    results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
-    os.makedirs(results_dir, exist_ok=True)
-    results_file = os.path.join(results_dir, f"{model_str}.csv")
-    pd.DataFrame([metrics]).to_csv(results_file, index=False)
-    print(f"\nResults saved to {results_file}")
+    print(f"Ensemble predictions saved to {predictions_filename}")
 
-    # Generate and save confusion matrix
-    cm = confusion_matrix(y_clean_test, ensemble_predictions)
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.title(f'Confusion Matrix for {model_str}')
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
-    cm_file = os.path.join(results_dir, f"{model_str}_confusion_matrix.png")
-    plt.savefig(cm_file)
-    print(f"Confusion matrix saved to {cm_file}")
+    # Record the evaluation results
+    row_data = OrderedDict([('Fold', 'Ensemble'), ('Epoch', 'N/A')] + list(full_metrics.items()))
+    with open(full_dataset_metrics_file, "a", newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writerow(row_data)
 
-    print("\nExperiment completed.")
+
+    print("Final ensemble evaluation completed.")
 
 if __name__ == '__main__':
     main()
