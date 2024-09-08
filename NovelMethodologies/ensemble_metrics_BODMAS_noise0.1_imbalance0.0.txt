@@ -1,0 +1,16 @@
+Dataset: BODMAS
+Noise Type: uniform
+Noise Rate: 0.1
+Imbalance Ratio: 0.0
+Data Augmentation: none
+Feature Additive Noise: 0.0
+Feature Multiplicative Noise: 0.0
+Weight Resampling: none
+
+--- Ensemble Metrics ---
+
+All Agreed - F1 Micro: 0.9609, F1 Macro: 0.8707, Amount: 97.64%
+Four Agreed - F1 Micro: 0.5098, F1 Macro: 0.2232, Amount: 1.32%
+Three Agreed - F1 Micro: 0.2500, F1 Macro: 0.1948, Amount: 0.42%
+Low Loss - F1 Micro: 0.9499, F1 Macro: 0.8592, Amount: 84.99%
+Single Low Loss - F1 Micro: 0.9483, F1 Macro: 0.8561, Amount: 84.99%
