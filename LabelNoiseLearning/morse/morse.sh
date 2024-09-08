@@ -1,6 +1,6 @@
 num_workers=0
 noise_rates=(0 0.1 0.3 0.6)
-imbalance_ratios=(0 0.05 0.01)
+imbalance_ratios=(0)
 noise_types=("uniform" "class" "feature" "MIMICRY")
 data_augmentations=("none" "undersampling" "oversampling" "smote" "adasyn")
 weight_resamplings=("none" "Class-Balance" "Focal" "Naive")
@@ -11,11 +11,20 @@ for seed in 1 #2 3 4 5
 do
   for model_type in morse
   do
-    #Experiment 1
-    # for noise_rate in "${noise_rates[@]}"; do
-    #     CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset CIC_IDS_2017 --model_type ${model_type} --data_augmentation ${data_augmentation} --noise_rate ${noise_rate} --noise_type ${noise_type} --imbalance_ratio ${imbalance_ratio} --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_1$
-    # done
-
+    # Experiment 1: Varying noise rate and imbalance ratio
+    for noise_rate in "${noise_rates[@]}"; do
+      for imbalance_ratio in "${imbalance_ratios[@]}"; do
+        CUDA_LAUNCH_BLOCKING=1 python morse.py \
+          --dataset CIC_IDS_2017 \
+          --model_type ${model_type} \
+          --weight_decay 0.0 \
+          --noise_rate ${noise_rate} \
+          --imbalance_ratio ${imbalance_ratio} \
+          --seed ${seed} \
+          --num_workers ${num_workers} \
+          --result_dir results/experiment_1
+      done
+    done
     # # # Experiment 2
     # for noise_rate in "${noise_rates[@]}"; do
     #     CUDA_LAUNCH_BLOCKING=1 python morse.py --dataset BODMAS --model_type ${model_type} --data_augmentation none --noise_rate ${noise_rate} --noise_type uniform --imbalance_ratio 0 --seed ${seed} --num_workers ${num_workers} --result_dir results/experiment_2$

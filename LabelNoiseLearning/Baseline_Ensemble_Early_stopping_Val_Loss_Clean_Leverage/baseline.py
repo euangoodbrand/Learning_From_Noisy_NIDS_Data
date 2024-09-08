@@ -46,56 +46,27 @@ import torch.nn.init as init
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
-from losses import LDAMLoss, SupConLoss, ce_loss
 
-#Morse imports
-from utils import AverageMeter, predict_dataset_softmax, get_labeled_dist
-from utils import debug_label_info, debug_unlabel_info, debug_real_label_info, debug_real_unlabel_info, debug_threshold
-from utils import refine_pesudo_label, update_proto, init_prototype, dynamic_threshold
+import copy
+from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader
-from losses import LDAMLoss, SupConLoss, ce_loss
-import timeit
-import math
 
 for dirname, _, filenames in os.walk('/data'):
     for filename in filenames:
         print(os.path.join(dirname, filename))
 
-
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
 nRowsRead = None 
 
-
 parser = argparse.ArgumentParser()
-
-parser.add_argument('--epsilon', type=float, default=0.95, help='Smoothing parameter for pseudo labels')
-parser.add_argument('--momentum', type=float, default=0.9)
-parser.add_argument('--weight_decay', type=float, default=2e-4)
-parser.add_argument('--nesterov', action='store_true', default=True,
-                    help='use nesterov momentum')
-parser.add_argument('--gamma', type=float, default=0.95, metavar='M',help='Learning rate step gamma (default: 0.7)')
-parser.add_argument('--lambda-u', default=1.0, type=float,
-                    help='coefficient of unlabeled loss')
-parser.add_argument('--num_class', type=int, default=None, help='number of classes in the dataset')
-parser.add_argument('--warmup', type=int, default=10) # 5 for malware-real, 10 for malware-syn
-parser.add_argument('--clean_theta', default=0.95, type=float)
-parser.add_argument('--use_hard_labels', default=False, type=bool) # soft version is better than hard label
-parser.add_argument('--use_scl', default=False, type=bool)
-parser.add_argument('--lambda-s', default=0.1, type=float)
-parser.add_argument('--dist_alignment', default=False, type=bool)
-parser.add_argument('--dist_alignment_eps', default=1e-6, type=float)
-parser.add_argument('--dist_alignment_batches', default=5, type=int)
-parser.add_argument('--reweight_start', default=30, type=int) # 40 for malware-real otherwise 20
-parser.add_argument('--imb_method', default='reweight', type=str)   # default is 're-weight'
-parser.add_argument('--use_pretrain', default=True, type=bool)
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--result_dir', type=str, help='dir to save result txt files', default='results/')
 parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.0)
 parser.add_argument('--forget_rate', type=float, help='forget rate', default=None)
 parser.add_argument('--noise_type', type=str, help='Type of noise to introduce', choices=['uniform', 'class', 'feature','MIMICRY'], default='uniform')
 parser.add_argument('--num_gradual', type=int, default=10, help='how many epochs for linear drop rate. This parameter is equal to Ek for lambda(E) in the paper.')
-parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS', 'Android_multiclass'])
+parser.add_argument('--dataset', type=str, help='cicids', choices=['CIC_IDS_2017','windows_pe_real','BODMAS'])
 parser.add_argument('--n_epoch', type=int, default=150)
 parser.add_argument('--optimizer', type=str, default='adam')
 parser.add_argument('--seed', type=int, default=1)
@@ -107,17 +78,10 @@ parser.add_argument('--fr_type', type=str, help='forget rate type', default='typ
 parser.add_argument('--data_augmentation', type=str, choices=['none', 'smote', 'undersampling', 'oversampling', 'adasyn'], default='none', help='Data augmentation technique, if any')
 parser.add_argument('--imbalance_ratio', type=float, default=0.0, help='Ratio to imbalance the dataset')
 parser.add_argument('--weight_resampling', type=str, choices=['none','Naive', 'Focal', 'Class-Balance'], default='none', help='Select the weight resampling method if needed')
-parser.add_argument('--T', type=float, default=1.0, help='Temperature for softmax scaling')
-parser.add_argument('--use_proto', default=False, type=bool)
-parser.add_argument('--threshold', default=0.40, type=float, # 0.95 for malware-real, 0.40 for malware-syn
-                        help='pseudo label threshold')
-
 parser.add_argument('--feature_add_noise_level', type=float, default=0.0, help='Level of additive noise for features')
 parser.add_argument('--feature_mult_noise_level', type=float, default=0.0, help='Level of multiplicative noise for features')
-parser.add_argument('--weight_decay_l2', type=float, default=0.0, help='Weight decay for L2 regularization. Default is 0 (no regularization).')
-parser.add_argument('--num_runs', type=int, default=1, help='Number of times to run the experiment')     
+parser.add_argument('--weight_decay', type=float, default=0.0, help='L2 regularization weight decay. Default is 0 (no regularization).')
 args = parser.parse_args()
-
 
 # Seed
 torch.manual_seed(args.seed)
@@ -137,11 +101,6 @@ elif args.dataset == "BODMAS":
     batch_size = 128
     learning_rate = args.lr 
     init_epoch = 0
-elif args.dataset == "Android_multiclass":
-    batch_size = 128
-    learning_rate = args.lr 
-    init_epoch = 0
-
 
 
 class CICIDSDataset(Dataset):
@@ -151,45 +110,18 @@ class CICIDSDataset(Dataset):
         self.noise_or_not = noise_or_not 
 
     def __getitem__(self, index):
-        feature = torch.tensor(self.features[index], dtype=torch.float32).view(-1)
+        feature = torch.tensor(self.features[index], dtype=torch.float32)
         label = torch.tensor(self.labels[index], dtype=torch.long)
         return feature, label, index  
 
     def __len__(self):
         return len(self.labels)
 
+
 if args.forget_rate is None:
     forget_rate=args.noise_rate
 else:
     forget_rate=args.forget_rate
-
-
-def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
-    device = x.device
-    add_noise = torch.zeros_like(x, device=device)
-    mult_noise = torch.ones_like(x, device=device)
-    scale_factor_additive = 75
-    scale_factor_multi = 200
-
-    if add_noise_level > 0.0:
-        # Generate additive noise with an aggressive Beta distribution
-        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
-        beta_add = torch.from_numpy(beta_add).float().to(device)
-        # Scale to [-1, 1] and then apply additive noise
-        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
-        add_noise = add_noise_level * beta_add
-
-    if mult_noise_level > 0.0:
-        # Generate multiplicative noise with an aggressive Beta distribution
-        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
-        beta_mult = torch.from_numpy(beta_mult).float().to(device)
-        # Scale to [-1, 1] and then apply multiplicative noise
-        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
-        mult_noise = 1 + mult_noise_level * beta_mult
-    
-    return mult_noise * x + add_noise
-
-
 
 def introduce_noise(labels, features, noise_type, noise_rate):
     if noise_type == 'uniform':
@@ -205,7 +137,6 @@ def introduce_noise(labels, features, noise_type, noise_rate):
         return introduce_mimicry_noise(labels, predefined_matrix, noise_rate)
     else:
         raise ValueError("Invalid noise type specified.")
-
 
 def apply_data_augmentation(features, labels, augmentation_method):
     try:
@@ -241,8 +172,6 @@ def apply_data_augmentation(features, labels, augmentation_method):
         print(f"Model fitting error with {augmentation_method}: {e}")
         return features, labels
 
-
-
 # Class dependant noise matrix, from previous evaluation run.
 predefined_matrix = np.array([
     [0.8, 0.03, 0.01, 0.01, 0.06, 0.0, 0.0, 0.0, 0.07, 0.0, 0.02, 0.0],
@@ -275,7 +204,30 @@ noise_transition_matrix = np.array([
     [0.000000, 0.000000, 0.000000, 0.019231, 0.730769, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.250000]
 ])
 
+def feature_noise(x, add_noise_level=0.0, mult_noise_level=0.0):
+    device = x.device
+    add_noise = torch.zeros_like(x, device=device)
+    mult_noise = torch.ones_like(x, device=device)
+    scale_factor_additive = 75
+    scale_factor_multi = 200
 
+    if add_noise_level > 0.0:
+        # Generate additive noise with an aggressive Beta distribution
+        beta_add = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_add = torch.from_numpy(beta_add).float().to(device)
+        # Scale to [-1, 1] and then apply additive noise
+        beta_add = scale_factor_additive * (beta_add - 0.5)  # Scale to range [-1, 1]
+        add_noise = add_noise_level * beta_add
+
+    if mult_noise_level > 0.0:
+        # Generate multiplicative noise with an aggressive Beta distribution
+        beta_mult = np.random.beta(0.1, 0.1, size=x.shape)  # Aggressive Beta distribution
+        beta_mult = torch.from_numpy(beta_mult).float().to(device)
+        # Scale to [-1, 1] and then apply multiplicative noise
+        beta_mult = scale_factor_multi * (beta_mult - 0.5)  # Scale to range [-1, 1]
+        mult_noise = 1 + mult_noise_level * beta_mult
+    
+    return mult_noise * x + add_noise
 
 def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate):
     if noise_rate == 0:
@@ -295,7 +247,6 @@ def introduce_class_dependent_label_noise(labels, class_noise_matrix, noise_rate
 
     return new_labels, noise_or_not
 
-
 def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
     if noise_rate == 0:
         return labels.copy(), np.zeros(len(labels), dtype=bool)
@@ -314,12 +265,10 @@ def introduce_mimicry_noise(labels, class_noise_matrix, noise_rate):
 
     return new_labels, noise_or_not
 
-
 def calculate_feature_thresholds(features):
     # Calculate thresholds for each feature, assuming features is a 2D array
     thresholds = np.percentile(features, 50, axis=0)  # Median as threshold for each feature
     return thresholds
-
 
 def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neighbors=5):
     if noise_rate == 0:
@@ -349,8 +298,6 @@ def introduce_feature_dependent_label_noise(features, labels, noise_rate, n_neig
 
     return new_labels, noise_or_not
 
-
-
 def introduce_uniform_noise(labels, noise_rate):
     if noise_rate == 0:
         return labels.copy(), np.zeros(len(labels), dtype=bool)
@@ -372,7 +319,6 @@ def introduce_uniform_noise(labels, noise_rate):
 
     return new_labels, noise_or_not
 
-
 def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample_half=True):
     if ratio == 0:
         print("No imbalance applied as ratio is 0.")
@@ -380,7 +326,6 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
 
     if ratio >= 1:
         raise ValueError("Imbalance ratio must be less than 1.")
-
 
     # Identify the unique classes and their counts
     unique, counts = np.unique(labels, return_counts=True)
@@ -404,26 +349,32 @@ def apply_imbalance(features, labels, ratio, min_samples_per_class=3, downsample
     
     indices_to_keep = []
     for cls in unique:
-            class_indices = np.where(labels == cls)[0]
-            if cls in downsample_classes:
-                # Calculate the target count for downsampled classes
-                n_majority_new = max(int(average_keep_class_count * ratio), min_samples_per_class)
-                n_majority_new = min(len(class_indices), n_majority_new)  # Ensure we don't try to keep more than available
+        class_indices = np.where(labels == cls)[0]
+        if cls in downsample_classes:
+            # Calculate the target count for downsampled classes
+            n_majority_new = max(int(average_keep_class_count * ratio), min_samples_per_class)
+            if len(class_indices) > n_majority_new:
                 keep_indices = np.random.choice(class_indices, n_majority_new, replace=False)
             else:
-                # Keep all samples from the classes not being downsampled
-                keep_indices = class_indices
+                keep_indices = class_indices  # Keep all samples if class count is below the target
+        else:
+            # Keep all samples from the classes not being downsampled
+            keep_indices = class_indices
 
-            indices_to_keep.extend(keep_indices)
+        indices_to_keep.extend(keep_indices)
 
     indices_to_keep = np.array(indices_to_keep)
     np.random.shuffle(indices_to_keep)  # Shuffle indices to mix classes
     
     return features[indices_to_keep], labels[indices_to_keep]
 
-def compute_weights(labels, num_classes, beta=0.9999, gamma=2.0, device='cuda'):
+def compute_weights(labels, no_of_classes, beta=0.9999, gamma=2.0, device='cuda'):
+    # Convert labels to a numpy array if it's a tensor
+    if isinstance(labels, torch.Tensor):
+        labels = labels.cpu().numpy()
+
     # Count each class's occurrence
-    samples_per_class = np.bincount(labels.cpu().numpy(), minlength=num_classes)
+    samples_per_class = np.bincount(labels, minlength=no_of_classes)
 
     # Handling different weight resampling strategies
     if args.weight_resampling == 'Naive':
@@ -436,24 +387,25 @@ def compute_weights(labels, num_classes, beta=0.9999, gamma=2.0, device='cuda'):
         focal_weights = initial_weights ** gamma
         weights = focal_weights
     elif args.weight_resampling == 'none':
-        weights = np.ones(num_classes, dtype=np.float32)
+        weights = np.ones(no_of_classes, dtype=np.float32)
     else:
         print(f"Unsupported weight computation method: {args.weight_resampling}")
         raise ValueError("Unsupported weight computation method")
 
-    # Normalize weights to sum to the number of classes
+    # Normalize weights to sum to number of classes
     total_weight = np.sum(weights)
-    if total_weight == 0:
-        weights = np.ones(num_classes, dtype=np.float32)
+    if (total_weight == 0):
+        weights = np.ones(no_of_classes, dtype=np.float32)
     else:
-        weights = (weights / total_weight) * num_classes
+        weights = (weights / total_weight) * no_of_classes
 
     # Convert numpy weights to torch tensor and move to the specified device
-    weights = torch.from_numpy(weights).float().to(device)
+    weight_per_label = torch.from_numpy(weights).float().to(device)
 
-    return weights
-
-
+    # Index weights by labels
+    weight_per_label = weight_per_label[torch.from_numpy(labels).to(device)]
+    
+    return weight_per_label
 
 # Adjust learning rate and betas for Adam Optimizer
 mom1 = 0.9
@@ -468,6 +420,7 @@ def adjust_learning_rate(optimizer, epoch):
     for param_group in optimizer.param_groups:
         param_group['lr']=alpha_plan[epoch]
         param_group['betas']=(beta1_plan[epoch], 0.999) 
+       
 # define drop rate schedule
 def gen_forget_rate(fr_type='type_1'):
     if fr_type=='type_1':
@@ -512,6 +465,45 @@ def accuracy(logit, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
+def train(train_loader, model, optimizer, criterion, epoch, no_of_classes):
+    model.train()  # Set model to training mode
+    train_total = 0
+    train_correct = 0
+    total_loss = 0
+
+    for i, (data, labels, _) in enumerate(train_loader):
+        data, labels = data.cuda(), labels.cuda()
+        logits = model(data)
+
+        # Ensure labels are within the valid range
+        valid_labels_mask = (labels >= 0) & (labels < no_of_classes)
+        if not torch.all(valid_labels_mask):
+            print(f"Warning: Some labels are out of range. Valid labels: {torch.sum(valid_labels_mask)}/{len(labels)}")
+            labels[~valid_labels_mask] = -1  # Set invalid labels to be ignored
+
+        # Compute the standard CrossEntropyLoss
+        loss = criterion(logits, labels)
+        
+        # Apply weights manually if weight resampling is enabled
+        if args.weight_resampling != 'none':
+            weights = compute_weights(labels[valid_labels_mask], no_of_classes=no_of_classes)
+            loss = (loss * weights).mean() 
+
+        # Backward pass and optimization
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        _, predicted = torch.max(logits.data, 1)
+        train_total += torch.sum(valid_labels_mask).item()
+        train_correct += (predicted[valid_labels_mask] == labels[valid_labels_mask]).sum().item()
+        total_loss += loss.item()
+
+    print(f'Epoch [{epoch + 1}/{args.n_epoch}], Training Accuracy: {100. * train_correct / train_total:.4f}%, Loss: {total_loss / len(train_loader):.4f}')
+
+    train_acc = 100. * train_correct / train_total
+    return train_acc
+
 
 def clean_class_name(class_name):
     # Replace non-standard characters with spaces
@@ -538,7 +530,7 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         return all_preds
 
     if args.dataset == 'CIC_IDS_2017':
-            index_to_class_name = {i: label_encoder.inverse_transform([i])[0] for i in range(len(label_encoder.classes_))}
+        index_to_class_name = {i: label_encoder.inverse_transform([i])[0] for i in range(len(label_encoder.classes_))}
     elif args.dataset == 'windows_pe_real':
         index_to_class_name = {
             i: name for i, name in enumerate([
@@ -552,15 +544,9 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
                 "Class 1", "Class 2", "Class 3", "Class 4", "Class 5",
                 "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"])
         }
-    elif args.dataset == 'Android_multiclass':
-        index_to_class_name = {i: label_encoder.classes_[i] for i in range(len(label_encoder.classes_))}
-    else:
-        raise ValueError(f"Unsupported dataset: {args.dataset}")
             
-    cleaned_class_names = [clean_class_name(str(name)) for name in index_to_class_name.values()]
-
+    cleaned_class_names = [clean_class_name(name) for name in index_to_class_name.values()]
     
-
     metrics = {
         'accuracy': accuracy_score(all_labels, all_preds),
         'balanced_accuracy': balanced_accuracy_score(all_labels, all_preds),
@@ -571,8 +557,7 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
         'f1_average': np.mean(f1_score(all_labels, all_preds, average=None, zero_division=0))  # Average F1 score
     }
 
-
-     # Class accuracy
+    # Class accuracy
     if args.dataset == 'CIC_IDS_2017':
         unique_labels = np.unique(all_labels)
         class_accuracy = {f'{label_encoder.inverse_transform([label])[0]}_acc': np.mean([all_preds[i] == label for i, lbl in enumerate(all_labels) if lbl == label]) for label in unique_labels}
@@ -593,7 +578,6 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
             ]) for label in unique_labels
         }
         metrics.update(class_accuracy)
-
 
     if save_conf_matrix:
 
@@ -671,7 +655,6 @@ def evaluate(test_loader, model, label_encoder, args, save_conf_matrix=False, re
 
     return metrics
 
-
 def weights_init(m):
     if isinstance(m, nn.Linear):
         # Apply custom initialization to linear layers
@@ -695,197 +678,207 @@ def handle_inf_nan(features_np):
     scaler = StandardScaler()
     return scaler.fit_transform(features_np)
 
+def train_single_mlp_with_clean_data(X_train, y_train, noise_or_not, X_val, y_val, args, label_encoder):
+    # Check unique labels in training and validation sets
+    train_labels = np.unique(y_train)
+    val_labels = np.unique(y_val)
+    print(f"Unique labels in training set: {train_labels}")
+    print(f"Unique labels in validation set: {val_labels}")
 
-def warmup(epoch, trainloader, model, optimizer):
-    model.train()
-    batch_idx = 0
-    losses = AverageMeter()
+    # Ensure all labels are within the correct range
+    n_classes = len(np.unique(np.concatenate((y_train, y_val))))
+    print(f"Total number of unique classes: {n_classes}")
 
-    for i, (x, y, _) in enumerate(trainloader):
-        x = x.cuda()
-        y = y.cuda()
-        logits = model(x)
-        
-        optimizer.zero_grad()
-        loss = nn.CrossEntropyLoss()(logits, y)
-        loss.backward()
-        optimizer.step()
-        losses.update(loss.item(), len(logits))
+    # Modify validation set to only include labels present in the training set
+    valid_mask = np.isin(y_val, train_labels)
+    X_val = X_val[valid_mask]
+    y_val = y_val[valid_mask]
 
-        batch_idx += 1
-
-    print('Epoch [%3d/%3d] Loss: %.2f' % (epoch, args.n_epoch, losses.avg))
-
-
-def mixup_criterion(self, criterion, pred, y_a, y_b, lam):
-        return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
-
-def splite_confident(self, outs, clean_targets, noisy_targets):
-    labeled_indexs = []
-    unlabeled_indexs = []
-
-    if not self.args.use_true_distribution:
-        if self.args.clean_method == 'confidence':
-                for cls in range(self.args.num_class):
-                    idx = np.where(noisy_targets==cls)[0]
-                    loss_cls = outs[idx]
-                    sorted, indices = torch.sort(loss_cls, descending=False)
-                    select_num = int(len(indices) * 0.15)
-                    for i in range(len(indices)):
-                        if i < select_num:
-                            labeled_indexs.append(idx[indices[i].item()])
-                        else:
-                            unlabeled_indexs.append(idx[indices[i].item()])
-    else:
-        sz = noisy_targets.shape[0]
-        for cls in range(self.args.num_class):
-            idx = np.where(noisy_targets == cls)[0]
-            select_num = int(sz * 0.15 * self.dist[cls])
-            cnt = 0
-            for i in range(len(idx)):
-                if noisy_targets[idx[i]] == clean_targets[idx[i]]:
-                    cnt += 1
-                    if cnt <= select_num:
-                        labeled_indexs.append(idx[i])
-                    else:
-                        unlabeled_indexs.append(idx[i])
-                else:
-                        unlabeled_indexs.append(idx[i])
-
-    return labeled_indexs, unlabeled_indexs
-
-def ourmatch_train(epoch, labeled_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, model, optimizer, criterion, args, threshold, prev_labels, prev_labels_idx):
-    model.train()
-
-    losses = AverageMeter()
-    losses_x = AverageMeter()
-    losses_u = AverageMeter()
-    losses_s = AverageMeter()
+    train_dataset = CICIDSDataset(X_train, y_train, noise_or_not)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
     
-    # labeled distribution
-    labeled_dist = get_labeled_dist(labeled_dataset).cuda()
+    val_dataset = CICIDSDataset(X_val, y_val, np.zeros(len(y_val), dtype=bool))
+    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-    debug_t_list = [AverageMeter() for _ in range(args.num_class * 2)]
-    debug_list = [AverageMeter() for _ in range(args.num_class * 2)]
+    # Create ensemble models for clean data identification
+    ensemble_models = []
+    num_initial_epochs = 5
+    num_ensemble_models = 5
 
-    for batch_idx, (b_l, b_u, b_imb_l) in enumerate(zip(labeled_loader, unlabeled_loader, imb_labeled_loader)):
-        # Unpack b_l, b_u, b_imb_l
-        xl, yl, _ = b_l
-        xw, xs, given_u = b_u
-        x_imb_l, y_imb_l, _ = b_imb_l
+    for _ in range(num_ensemble_models):
+        model = MLPNet(num_features=X_train.shape[1], num_classes=n_classes, dataset=args.dataset).cuda()
+        model.apply(weights_init)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        criterion = nn.CrossEntropyLoss()
+
+        for epoch in range(num_initial_epochs):
+            train(train_loader, model, optimizer, criterion, epoch, n_classes)
         
-        # Convert tensors to float32 and move to GPU
-        xl = xl.cuda().float()
-        xw = xw.cuda().float()
-        xs = xs.cuda().float()
-        x_imb_l = x_imb_l.cuda().float()
+        ensemble_models.append(model)
+
+    # Identify clean samples
+    ensemble_predictions = ensemble_predict(ensemble_models, X_train)
+    clean_indices = np.all(ensemble_predictions == y_train, axis=0) & (noise_or_not == False)
+    
+    # Ensure at least one sample from each class is in the clean dataset
+    for label in train_labels:
+        if np.sum(clean_indices & (y_train == label)) == 0:
+            label_indices = np.where(y_train == label)[0]
+            if len(label_indices) > 0:
+                clean_indices[np.random.choice(label_indices)] = True
+
+    # Create clean dataset
+    X_train_clean = X_train[clean_indices]
+    y_train_clean = y_train[clean_indices]
+
+    print(f"Clean samples identified: {len(X_train_clean)} out of {len(X_train)}")
+    print(f"Unique labels in clean dataset: {np.unique(y_train_clean)}")
+
+    # Create clean data loader
+    clean_dataset = CICIDSDataset(X_train_clean, y_train_clean, np.zeros(len(y_train_clean), dtype=bool))
+    clean_loader = DataLoader(dataset=clean_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+
+    #   Train clean ensemble
+    clean_ensemble = []
+    for i in range(num_ensemble_models):
+        print(f"\nTraining clean model {i+1}/{num_ensemble_models}")
+        clean_model = train_single_mlp(X_train_clean, y_train_clean, np.zeros(len(y_train_clean), dtype=bool), X_val, y_val, args, label_encoder, n_classes)
+        clean_ensemble.append(clean_model)
+
+    # Train noisy ensemble
+    noisy_ensemble = []
+    for i in range(num_ensemble_models):
+        print(f"\nTraining noisy model {i+1}/{num_ensemble_models}")
+        noisy_model = train_single_mlp(X_train, y_train, noise_or_not, X_val, y_val, args, label_encoder, n_classes)
+        noisy_ensemble.append(noisy_model)
+
+    return clean_ensemble, noisy_ensemble
+def train_single_mlp(X_train, y_train, noise_or_not, X_val, y_val, args, label_encoder, n_classes):
+    train_dataset = CICIDSDataset(X_train, y_train, noise_or_not)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
+    
+    val_dataset = CICIDSDataset(X_val, y_val, np.zeros(len(y_val), dtype=bool))
+    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+
+    model = MLPNet(num_features=X_train.shape[1], num_classes=n_classes, dataset=args.dataset).cuda()
+    model.apply(weights_init)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    criterion = nn.CrossEntropyLoss(ignore_index=-1)
+
+    # Early stopping parameters
+    patience = 5
+    best_val_loss = float('inf')
+    best_val_acc = 0
+    counter = 0
+    early_stop = False
+
+    # Learning rate scheduler
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, verbose=True)
+
+    for epoch in range(args.n_epoch):
+        train_acc = train(train_loader, model, optimizer, criterion, epoch, n_classes)
+        val_loss, val_acc = validate(val_loader, model, criterion, n_classes)
         
-        yl = yl.cuda()
-        y_imb_l = y_imb_l.cuda()
-        given_u = given_u.cuda()
+        print(f"Epoch {epoch+1}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.2f}%")
+        
+        scheduler.step(val_loss)
 
-        if args.dataset == 'windows_pe_real':
-            if xs.ndim == 2 and xs.shape[1] == 1:
-                xs = xs.view(-1, 1024)
-            elif xs.ndim == 1:
-                xs = xs.unsqueeze(1).repeat(1, 1024)
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_val_loss = val_loss
+            counter = 0
+            best_model = copy.deepcopy(model)
+        else:
+            counter += 1
+            if counter >= patience:
+                print(f"Early stopping triggered at epoch {epoch + 1}")
+                early_stop = True
+                break
 
-        elif args.dataset == 'BODMAS':
-            if xs.ndim == 2 and xs.shape[1] == 1:
-                xs = xs.view(-1, 2381)
-            elif xs.ndim == 1:
-                xs = xs.unsqueeze(1).repeat(1, 2381)
+        # Additional stopping criterion: if accuracy drops significantly
+        if val_acc < 0.5 * best_val_acc:
+            print(f"Stopping due to significant accuracy drop at epoch {epoch + 1}")
+            early_stop = True
+            break
 
-        elif args.dataset == 'Android_multiclass':
-            if xs.ndim == 2 and xs.shape[1] == 1:
-                xs = xs.view(-1, 1159)
-            elif xs.ndim == 1:
-                xs = xs.unsqueeze(1).repeat(1, 1159)
-        elif args.dataset == 'CIC_IDS_2017':
-            if xs.ndim == 2 and xs.shape[1] == 1:
-                xs = xs.view(-1, 78)
-            elif xs.ndim == 1:
-                xs = xs.unsqueeze(1).repeat(1, 78)
+        if early_stop:
+            break
 
-        logits_xw = model(xw)
-        logits_xs = model(xs)
-        class_weights = compute_weights(yl, args.num_class)  # Get class weights
+    return best_model
 
-        if args.imb_method == 'resample':
-            logits_imb_x = model(x_imb_l)
-            Lx = F.cross_entropy(logits_imb_x, y_imb_l, weight=class_weights, reduction='mean')
 
-        elif args.imb_method == 'mixup':
-            lam = np.random.beta(args.alpha, args.alpha)
-            lam = max(lam, 1 - lam)
-            idx = torch.randperm(xl.size()[0])
-            mix_x = model.forward_encoder(x_imb_l) * lam + (1 - lam) * model.forward_encoder(xl)
-            mix_logits = model.forward_classifier(mix_x)
-            Lx = mixup_criterion(criterion, mix_logits, y_imb_l, yl[idx], lam)
+def ensemble_predict_with_clean_priority(clean_ensemble, noisy_ensemble, X):
+    clean_predictions = ensemble_predict(clean_ensemble, X)
+    noisy_predictions = ensemble_predict(noisy_ensemble, X)
+    
+    final_predictions = []
+    for clean_pred, noisy_pred in zip(clean_predictions, noisy_predictions):
+        if len(set(clean_pred)) == 1:  # All clean ensemble models agree
+            final_predictions.append(clean_pred[0])
+        else:
+            final_predictions.append(noisy_pred)
+    
+    return np.array(final_predictions)
 
-        elif args.imb_method == 'reweight':
-            logits_x = model(xl)
-            Lx = F.cross_entropy(logits_x, yl, weight=class_weights, reduction='mean')
 
-        elif args.imb_method == 'logits':
-            logits_x = model(xl)
-            Lx = F.cross_entropy(logits_x, yl, reduction='mean')
-            logit = logits_x  # Define logit here using logits_x
+def validate(val_loader, model, criterion, n_classes):
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for data, labels, _ in val_loader:
+            data, labels = data.cuda(), labels.cuda()
+            outputs = model(data)
+            
+            valid_labels_mask = (labels >= 0) & (labels < n_classes)
+            if not torch.all(valid_labels_mask):
+                labels[~valid_labels_mask] = -1
 
-        if args.use_scl:
-            feat = model.forward_feat(xl)
-            feat = feat.unsqueeze(1)
-            Ls = criterion(feat, yl)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item()
 
+            _, predicted = torch.max(outputs.data, 1)
+            total += torch.sum(valid_labels_mask).item()
+            correct += (predicted[valid_labels_mask] == labels[valid_labels_mask]).sum().item()
+
+    val_loss = total_loss / len(val_loader)
+    val_acc = 100 * correct / total
+    return val_loss, val_acc
+
+def ensemble_predict(models, X):
+    predictions = []
+    X_tensor = torch.tensor(X, dtype=torch.float32).cuda()
+    for model in models:
+        model.eval()
         with torch.no_grad():
-            probs = torch.softmax(logits_xw.detach() / args.T, -1)
-            if args.dist_alignment:
-                model_dist = prev_labels.mean(0)
-                prev_labels[prev_labels_idx] = probs.mean(0)
-                prev_labels_idx = (prev_labels_idx + 1) % args.dist_alignment_batches
-                probs *= (labeled_dist + args.dist_alignment_eps) / (model_dist + args.dist_alignment_eps)
-                probs /= probs.sum(-1, keepdim=True)
+            outputs = model(X_tensor)
+            _, preds = torch.max(outputs, 1)
+            predictions.append(preds.cpu().numpy())
+    return np.array(predictions)
 
-            if not args.use_proto:
-                yu = torch.argmax(probs, -1)
-                mask = (-1.0 * torch.log(torch.max(probs, -1)[0]) <= threshold.rho_t).to(dtype=torch.float32)
-            else:
-                yu, mask = refine_pesudo_label(xw, probs, threshold, prototype, model)
-
-        given_u = torch.clamp(given_u, 0, args.num_class - 1)
-
-        if args.use_hard_labels:
-            Lu = (F.cross_entropy(logits_xs, yu, weight=class_weights, reduction='none') * mask).mean()
-        else:
-            one_hot = F.one_hot(given_u, num_classes=args.num_class).float()
-            probs = probs * args.epsilon + (1 - args.epsilon) * one_hot
-            Lu = (ce_loss(logits_xs, probs, use_hard_labels=False, weight=class_weights, reduction='none') * mask).mean()
-
-        if args.use_scl:
-            loss = Lx + args.lambda_u * Lu + args.lambda_s * Ls
-        else:
-            loss = Lx + args.lambda_u * Lu
-
-        optimizer.zero_grad()
-        loss.backward()
-        losses.update(loss.item())
-        losses_x.update(Lx.item())
-        losses_u.update(Lu.item())
-        if args.use_scl:
-            losses_s.update(Ls.item())
-
-        optimizer.step()
-        threshold.update()
-        if args.use_proto:
-            prototype = update_proto(xl, yl, prototype, model)
+def ensemble_predict_with_clean_priority(clean_ensemble, noisy_ensemble, X):
+    clean_predictions = ensemble_predict(clean_ensemble, X)
+    noisy_predictions = ensemble_predict(noisy_ensemble, X)
     
-    print('Epoch [%3d/%3d] Loss: %.2f' % (epoch, args.n_epoch, losses.avg))
-
+    final_predictions = []
+    for i in range(len(X)):
+        clean_votes = clean_predictions[:, i]
+        if len(set(clean_votes)) == 1:  # All clean ensemble models agree
+            final_predictions.append(clean_votes[0])
+        else:
+            noisy_vote = noisy_predictions[:, i].mean()  # average vote from noisy ensemble
+            final_predictions.append(int(round(noisy_vote)))
+    
+    return np.array(final_predictions)
 
 def main():
-    print(model_str)
+    print(f"Starting experiment: {model_str}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+
     label_encoder = LabelEncoder()
 
+    # Load and preprocess data based on the dataset
     if args.dataset == 'CIC_IDS_2017':
         preprocessed_file_path = 'data/final_dataframe.csv'
         if not os.path.exists(preprocessed_file_path):
@@ -900,14 +893,13 @@ def main():
         features_np = df.drop('Label', axis=1).values.astype(np.float32)
         features_np = handle_inf_nan(features_np)
 
-        # Splitting the data into training, test, and a clean test set
         X_train, X_temp, y_train, y_temp = train_test_split(features_np, labels_np, test_size=0.4, random_state=42)
         X_test, X_clean_test, y_test, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
     elif args.dataset == 'windows_pe_real':
         npz_noisy_file_path = 'data/Windows_PE/real_world/malware.npz'
         npz_clean_file_path = 'data/Windows_PE/real_world/malware_true.npz'
-        with np.load(npz_clean_file_path) as data:
+        with np.load(npz_noisy_file_path) as data:
             X_train, y_train = data['X_train'], data['y_train']
             X_test, y_test = data['X_test'], data['y_test']
         y_train = label_encoder.fit_transform(y_train)
@@ -917,192 +909,122 @@ def main():
         y_clean_test = label_encoder.transform(y_clean_test)
 
     elif args.dataset == 'BODMAS':
-        npz_file_path = 'data/Windows_PE/synthetic/malware.npz'
+        npz_file_path = 'data/Windows_PE/synthetic/malware_true.npz'
         with np.load(npz_file_path) as data:
             X_temp, y_temp = data['X_train'], data['y_train']
             X_test, y_test = data['X_test'], data['y_test']
         y_temp = label_encoder.fit_transform(y_temp)
         y_test = label_encoder.transform(y_test)
         
-        # Splitting the data into training and a clean test set
         X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_temp, y_temp, test_size=0.3, random_state=42)
-
-    elif args.dataset =='Android_multiclass':
-        npz_file_path = 'data/android/multi_class.npz'
-        with np.load(npz_file_path) as data:
-            X_data, y_data = data['x_data'], data['y_data']
-        X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_data, y_data, test_size=0.4, random_state=42)
-        y_train = label_encoder.fit_transform(y_train)
-        y_clean_test = label_encoder.transform(y_clean_test)
-    elif args.dataset =='Android_binary':
-        npz_file_path = 'data/android/APIGraphBinary.npz'
-        with np.load(npz_file_path) as data:
-            X_data, y_data = data['X_train'], data['y_train_binary']
-        X_train, X_clean_test, y_train, y_clean_test = train_test_split(X_data, y_data, test_size=0.4, random_state=42)
-        y_train = label_encoder.fit_transform(y_train)
-        y_clean_test = label_encoder.transform(y_clean_test)
 
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset}")
 
-    # Directory for validation and full dataset evaluation results
+    # Print original dataset information
+    print("Original dataset:")
+    print(f"Length of X_train: {len(X_train)}")
+    print(f"Length of y_train: {len(y_train)}")
+    print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
+
+    # Apply imbalance
+    X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
+    print("\nAfter applying imbalance:")
+    print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
+    print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
+    print("Class distribution after imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
+
+    # Introduce noise
+    y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
+    
+    # Apply feature noise
+    X_train_noisy = feature_noise(torch.tensor(X_train_imbalanced), 
+                                  add_noise_level=args.feature_add_noise_level, 
+                                  mult_noise_level=args.feature_mult_noise_level).numpy()
+
+    print("\nAfter introducing noise:")
+    print(f"Length of X_train_noisy: {len(X_train_noisy)}")
+    print(f"Length of y_train_noisy: {len(y_train_noisy)}")
+    print(f"Length of noise_or_not: {len(noise_or_not)}")
+    print("Class distribution after noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
+
+    # Apply data augmentation
+    X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_noisy, y_train_noisy, args.data_augmentation)
+
+    if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
+        noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)
+
+    print("\nAfter data augmentation:")
+    print(f"Length of X_train_augmented: {len(X_train_augmented)}")
+    print(f"Length of y_train_augmented: {len(y_train_augmented)}")
+    print(f"Length of noise_or_not: {len(noise_or_not)}")
+    print("Class distribution after augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
+
+    # Split the training data to create a validation set
+    X_train_final, X_val, y_train_final, y_val, noise_or_not_final, noise_or_not_val = train_test_split(
+        X_train_augmented, y_train_augmented, noise_or_not, test_size=0.2, random_state=42
+    )
+
+    # Train clean and noisy ensembles
+    print("\nTraining clean and noisy ensembles")
+    clean_ensemble, noisy_ensemble = train_single_mlp_with_clean_data(X_train_final, y_train_final, noise_or_not_final, X_val, y_val, args, label_encoder)
+
+    # Prepare clean data for final evaluation
+    clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
+    clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+
+    # Evaluate the ensemble on clean test dataset
+    print("\nEvaluating ensemble on clean dataset...")
+    ensemble_predictions = ensemble_predict_with_clean_priority(clean_ensemble, noisy_ensemble, X_clean_test)
+
+    # Calculate metrics
+    metrics = {
+        'accuracy': accuracy_score(y_clean_test, ensemble_predictions),
+        'balanced_accuracy': balanced_accuracy_score(y_clean_test, ensemble_predictions),
+        'precision_macro': precision_score(y_clean_test, ensemble_predictions, average='macro', zero_division=0),
+        'recall_macro': recall_score(y_clean_test, ensemble_predictions, average='macro', zero_division=0),
+        'f1_micro': f1_score(y_clean_test, ensemble_predictions, average='micro', zero_division=0),
+        'f1_macro': f1_score(y_clean_test, ensemble_predictions, average='macro', zero_division=0),
+        'f1_average': np.mean(f1_score(y_clean_test, ensemble_predictions, average=None, zero_division=0))
+    }
+    # Class accuracy
+    unique_labels = np.unique(y_clean_test)
+    if args.dataset == 'BODMAS':
+        class_accuracy = {f'Class_{label+1}_acc': np.mean(ensemble_predictions[y_clean_test == label] == label) for label in unique_labels}
+    elif args.dataset == 'CIC_IDS_2017':
+        class_accuracy = {f'{label_encoder.inverse_transform([label])[0]}_acc': np.mean(ensemble_predictions[y_clean_test == label] == label) for label in unique_labels}
+    elif args.dataset == 'windows_pe_real':
+        labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
+                  "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
+                  "InstallMonster", "Locky"]
+        class_accuracy = {f'{labels[label]}_acc': np.mean(ensemble_predictions[y_clean_test == label] == label) for label in unique_labels}
+    
+    metrics.update(class_accuracy)
+
+    # Print metrics
+    print("\nFinal Metrics:")
+    for key, value in metrics.items():
+        print(f"{key}: {value}")
+
+    # Save results
     results_dir = os.path.join(args.result_dir, args.dataset, args.model_type)
     os.makedirs(results_dir, exist_ok=True)
+    results_file = os.path.join(results_dir, f"{model_str}.csv")
+    pd.DataFrame([metrics]).to_csv(results_file, index=False)
+    print(f"\nResults saved to {results_file}")
 
-    # File paths for CSV and model files
-    full_dataset_metrics_file = os.path.join(results_dir, f"{model_str}_full_dataset.csv")
+    # Generate and save confusion matrix
+    cm = confusion_matrix(y_clean_test, ensemble_predictions)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title(f'Confusion Matrix for {model_str}')
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    cm_file = os.path.join(results_dir, f"{model_str}_confusion_matrix.png")
+    plt.savefig(cm_file)
+    print(f"Confusion matrix saved to {cm_file}")
 
-    # Set a default fieldnames value at the beginning
-    fieldnames = []
-
-    # Prepare CSV file for full dataset metrics
-    with open(full_dataset_metrics_file, "w", newline='', encoding='utf-8') as csvfile:
-        if args.dataset == 'BODMAS':
-            fieldnames = ['Run', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'Class {label+1}_acc' for label in label_encoder.classes_]
-        elif args.dataset == 'CIC_IDS_2017':
-            fieldnames = ['Run', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in label_encoder.classes_]
-        elif args.dataset == 'windows_pe_real':
-            labels = ["Benign", "VirLock", "WannaCry", "Upatre", "Cerber",
-                    "Urelas", "WinActivator", "Pykspa", "Ramnit", "Gamarue",
-                    "InstallMonster", "Locky"]
-            fieldnames = ['Run', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
-        elif args.dataset == 'Android_multiclass':
-            # Define fieldnames for Android_multiclass
-            labels = label_encoder.classes_
-            fieldnames = ['Run', 'Epoch', 'accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_micro', 'f1_macro','f1_average'] + \
-                        [f'{label}_acc' for label in labels]
-        else:
-            raise ValueError(f"Unsupported dataset: {args.dataset}")
-
-    # Open the CSV file and create the writer
-    csvfile = open(full_dataset_metrics_file, "w", newline='', encoding='utf-8')
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    writer.writeheader()
-
-    all_runs_metrics = []
-
-    for run in range(args.num_runs):
-        print(f"Starting run {run + 1} of {args.num_runs}")
-
-        # Reset random seeds for reproducibility across runs
-        torch.manual_seed(args.seed + run)
-        torch.cuda.manual_seed(args.seed + run)
-        np.random.seed(args.seed + run)
-
-        # Print the original dataset sizes and class distribution
-        print("Original dataset:")
-        print(f"Length of X_train: {len(X_train)}")
-        print(f"Length of y_train: {len(y_train)}")
-        print("Class distribution in original dataset:", {label: np.sum(y_train == label) for label in np.unique(y_train)})
-
-        # Apply imbalance to the training dataset
-        X_train_imbalanced, y_train_imbalanced = apply_imbalance(X_train, y_train, args.imbalance_ratio)
-
-        # Print class distribution after applying imbalance
-        print("Before introducing noise:")
-        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-        print(f"Length of y_train_imbalanced: {len(y_train_imbalanced)}")
-        print("Class distribution after applying imbalance:", {label: np.sum(y_train_imbalanced == label) for label in np.unique(y_train_imbalanced)})
-
-        # Introduce noise to the imbalanced data
-        y_train_noisy, noise_or_not = introduce_noise(y_train_imbalanced, X_train_imbalanced, args.noise_type, args.noise_rate)
-
-        # Apply feature noise
-        X_train_imbalanced = feature_noise(torch.tensor(X_train_imbalanced), add_noise_level=args.feature_add_noise_level, mult_noise_level=args.feature_mult_noise_level).numpy()
-
-        # Print class distribution after introducing noise
-        print("Before augmentation:")
-        print(f"Length of X_train_imbalanced: {len(X_train_imbalanced)}")
-        print(f"Length of y_train_noisy: {len(y_train_noisy)}")
-        print(f"Length of noise_or_not: {len(noise_or_not)}")
-        print("Class distribution after introducing noise:", {label: np.sum(y_train_noisy == label) for label in np.unique(y_train_noisy)})
-
-        # Apply data augmentation to the noisy data
-        X_train_augmented, y_train_augmented = apply_data_augmentation(X_train_imbalanced, y_train_noisy, args.data_augmentation)
-
-        if args.data_augmentation in ['smote', 'adasyn', 'oversampling']:
-            # Recalculate noise_or_not to match the augmented data size
-            noise_or_not = np.zeros(len(y_train_augmented), dtype=bool)  # Adjust the noise_or_not array size and values as needed
-
-        # Print class distribution after data augmentation
-        print("After augmentation:")
-        print(f"Length of X_train_augmented: {len(X_train_augmented)}")
-        print(f"Length of y_train_augmented: {len(y_train_augmented)}")
-        print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
-        print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
-        
-        if args.dataset == 'BODMAS':
-            milestones = [5, 30, 60] if args.noise_rate == 0.6 else [30, 60]
-        else:
-            milestones = [10, 60, 90]
-
-        # Dynamically calculate the number of classes
-        args.num_class = len(np.unique(y_train))
-        print(f"Number of classes: {args.num_class}")
-
-        # Define a suitable value for gamma
-        gamma = 0.1  # You can adjust this value as needed
-        # Initialize the threshold object with gamma
-        threshold = dynamic_threshold(args.threshold, args.num_class, gamma)  # Initialize the threshold object
-
-        # Full dataset training
-        print("Training on the full dataset...")
-        # Prepare the full augmented dataset for training
-        full_train_dataset = CICIDSDataset(X_train_augmented, y_train_augmented, noise_or_not)
-        full_train_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-
-        # Prepare the full model
-        full_model = MLPNet(num_features=X_train_augmented.shape[1], num_classes=len(np.unique(y_train_augmented)), dataset=args.dataset).cuda()
-        full_model.apply(weights_init)
-        full_optimizer = optim.Adam(full_model.parameters(), lr=args.lr, weight_decay=args.weight_decay_l2)
-        full_criterion = CrossEntropyLoss()
-
-        # Initialize prev_labels and prev_labels_idx
-        prev_labels = torch.zeros((args.dist_alignment_batches, args.num_class)).cuda()
-        prev_labels_idx = 0
-
-        # Train on the full augmented dataset
-        print("Training on the full augmented dataset...")
-        for epoch in range(args.n_epoch):
-            labeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers)
-            unlabeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-            imb_labeled_loader = DataLoader(dataset=full_train_dataset, batch_size=batch_size, shuffle=True, num_workers=args.num_workers) # Placeholder
-
-            # Ensure prev_labels and prev_labels_idx are passed
-            ourmatch_train(epoch, full_train_dataset, labeled_loader, unlabeled_loader, imb_labeled_loader, full_model, full_optimizer, full_criterion, args, threshold, prev_labels, prev_labels_idx)
-
-        # Prepare clean data for evaluation
-        clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
-        clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
-
-        # Evaluate the full model on clean dataset and save predictions
-        print("Evaluating on clean dataset...")
-        full_metrics = evaluate(clean_test_loader, full_model, label_encoder, args, save_conf_matrix=(run == args.num_runs - 1))
-        
-        all_runs_metrics.append(full_metrics)
-
-        # Record the evaluation results for this run
-        row_data = OrderedDict([('Run', run + 1), ('Epoch', args.n_epoch)] + list(full_metrics.items()))
-        writer.writerow(row_data)
-
-        print(f"Run {run + 1} completed.")
-
-    # Calculate and save average metrics
-    avg_metrics = {}
-    for key in all_runs_metrics[0].keys():
-        avg_metrics[key] = sum(run_metrics[key] for run_metrics in all_runs_metrics) / args.num_runs
-
-    # Save average results
-    row_data = OrderedDict([('Run', 'Average'), ('Epoch', args.n_epoch)] + list(avg_metrics.items()))
-    writer.writerow(row_data)
-
-    # Close the CSV file
-    csvfile.close()
-
-    print("All runs completed. Average results saved.")
+    print("\nExperiment completed.")
 
 if __name__ == '__main__':
     main()

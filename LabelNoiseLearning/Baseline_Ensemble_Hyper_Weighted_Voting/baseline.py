@@ -769,18 +769,23 @@ def train_and_evaluate():
     print(f"Length of noise_or_not (adjusted if necessary): {len(noise_or_not)}")
     print("Class distribution after data augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
+    # Split the training data to create a validation set
+    X_train_final, X_val, y_train_final, y_val = train_test_split(X_train_augmented, y_train_augmented, test_size=0.2, random_state=42)
+
     # Train ensemble of MLPs
     num_models = 5
     ensemble_models = []
-    
+    model_accuracies = []
+
     for i in range(num_models):
-        print(f"Training MLP model {i+1}/{num_models}")
-        model, _ = train_single_mlp(X_train_augmented, y_train_augmented, noise_or_not, X_clean_test, y_clean_test, args, label_encoder)
+        print(f"\nTraining MLP model {i+1}/{num_models}")
+        model, val_acc = train_single_mlp(X_train_final, y_train_final, noise_or_not, X_val, y_val, args, label_encoder)
         ensemble_models.append(model)
+        model_accuracies.append(val_acc)
 
-    # Use equal weights for ensemble
-    weights = np.ones(num_models) / num_models
-
+    # Normalize accuracies to use as weights
+    weights = np.array(model_accuracies) / sum(model_accuracies)
+    
     # Prepare clean data for evaluation
     clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
     clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)

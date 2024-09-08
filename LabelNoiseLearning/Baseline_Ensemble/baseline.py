@@ -802,22 +802,26 @@ def main():
     print(f"Length of noise_or_not: {len(noise_or_not)}")
     print("Class distribution after augmentation:", {label: np.sum(y_train_augmented == label) for label in np.unique(y_train_augmented)})
 
+    # Split the training data to create a validation set
+    X_train_final, X_val, y_train_final, y_val = train_test_split(X_train_augmented, y_train_augmented, test_size=0.2, random_state=42)
+
     # Train ensemble of MLPs
     num_models = 5
     ensemble_models = []
-    
+
     for i in range(num_models):
         print(f"\nTraining MLP model {i+1}/{num_models}")
-        model = train_single_mlp(X_train_augmented, y_train_augmented, noise_or_not, X_clean_test, y_clean_test, args, label_encoder)
+        model = train_single_mlp(X_train_final, y_train_final, noise_or_not, X_val, y_val, args, label_encoder)
         ensemble_models.append(model)
 
-    # Prepare clean data for evaluation
+    # Prepare clean data for final evaluation
     clean_test_dataset = CICIDSDataset(X_clean_test, y_clean_test, np.zeros_like(y_clean_test, dtype=bool))
     clean_test_loader = DataLoader(dataset=clean_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
-    # Evaluate the ensemble on clean dataset
+    # Evaluate the ensemble on clean test dataset
     print("\nEvaluating ensemble on clean dataset...")
     ensemble_predictions = ensemble_predict(ensemble_models, X_clean_test)
+
     
     # Calculate metrics
     metrics = {
